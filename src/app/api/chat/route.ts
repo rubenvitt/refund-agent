@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { runWorkflow } from '@/lib/workflow-engine';
 import type { ChatRequestBody } from '@/lib/types';
 
+export const runtime = 'edge';
+
 export async function POST(request: NextRequest) {
   try {
     const body: ChatRequestBody = await request.json();

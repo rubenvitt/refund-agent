@@ -4,6 +4,8 @@ import { scoreEvalCase } from '@/lib/eval-runner';
 import { createSeedState } from '@/lib/seed-data';
 import type { EvalCase, EvalResult, AppSettings, PromptConfig, ToolCatalog } from '@/lib/types';
 
+export const runtime = 'edge';
+
 type EvalRequestBody = {
   cases: EvalCase[];
   settings: AppSettings;
