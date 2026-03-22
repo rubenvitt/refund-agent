@@ -186,27 +186,9 @@ export type AppSettings = {
   anthropicApiKey: string;
 };
 
-// ── API ──
-
-export type ChatRequestBody = {
-  messages: Array<{ role: 'user' | 'assistant'; content: string }>;
-  settings: AppSettings;
-  promptConfig: PromptConfig;
-  toolCatalog: ToolCatalog;
-  demoState: DemoState;
-  pendingApproval?: { toolCallId: string; approved: boolean } | null;
-};
-
 export type ApprovalRequest = {
   toolCallId: string;
   toolName: string;
   arguments: Record<string, unknown>;
   message: string;
-};
-
-export type ChatResponseData = {
-  message: string;
-  trace: RunTrace;
-  updatedState: DemoState;
-  approvalRequest: ApprovalRequest | null;
 };

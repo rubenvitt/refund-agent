@@ -2,8 +2,11 @@
 
 import { useCallback, useState } from 'react';
 import { useAppState, type ChatMessage } from './store';
-import type { EvalCase, EvalResult, ChatResponseData } from './types';
+import type { EvalCase, EvalResult } from './types';
 import { evalCases as defaultEvalCases } from './eval-cases';
+import { runWorkflow } from './workflow-engine';
+import { scoreEvalCase } from './eval-runner';
+import { createSeedState } from './seed-data';
 
 export function useChat() {
   const { state, dispatch } = useAppState();
@@ -21,39 +24,38 @@ export function useChat() {
       setIsLoading(true);
 
       try {
-        const res = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            messages: [...state.chatMessages, userMsg].map((m) => ({
-              role: m.role,
-              content: m.content,
-            })),
-            settings: state.settings,
-            promptConfig: state.promptConfig,
-            toolCatalog: state.toolCatalog,
-            demoState: state.demoState,
-          }),
-        });
+        const apiKey =
+          state.settings.provider === 'openai'
+            ? state.settings.openaiApiKey
+            : state.settings.anthropicApiKey;
 
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ error: 'Request failed' }));
-          throw new Error(err.error ?? `HTTP ${res.status}`);
+        if (!apiKey) {
+          throw new Error(`API key not configured for ${state.settings.provider}`);
         }
 
-        const data: ChatResponseData = await res.json();
+        const result = await runWorkflow({
+          userMessage: content,
+          conversationHistory: state.chatMessages.map((m) => ({
+            role: m.role,
+            content: m.content,
+          })),
+          settings: state.settings,
+          promptConfig: state.promptConfig,
+          toolCatalog: state.toolCatalog,
+          demoState: state.demoState,
+        });
 
         const assistantMsg: ChatMessage = {
           id: crypto.randomUUID(),
           role: 'assistant',
-          content: data.message,
+          content: result.finalAnswer,
         };
         dispatch({ type: 'ADD_CHAT_MESSAGE', payload: assistantMsg });
-        dispatch({ type: 'ADD_TRACE', payload: data.trace });
-        dispatch({ type: 'UPDATE_DEMO_STATE', payload: data.updatedState });
+        dispatch({ type: 'ADD_TRACE', payload: result.trace });
+        dispatch({ type: 'UPDATE_DEMO_STATE', payload: result.updatedState });
 
-        if (data.approvalRequest) {
-          dispatch({ type: 'SET_APPROVAL_REQUEST', payload: data.approvalRequest });
+        if (result.approvalRequest) {
+          dispatch({ type: 'SET_APPROVAL_REQUEST', payload: result.approvalRequest });
         }
       } catch (err) {
         dispatch({
@@ -87,41 +89,34 @@ export function useApproval() {
       dispatch({ type: 'SET_ERROR', payload: null });
 
       try {
-        const res = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            messages: state.chatMessages.map((m) => ({
-              role: m.role,
-              content: m.content,
-            })),
-            settings: state.settings,
-            promptConfig: state.promptConfig,
-            toolCatalog: state.toolCatalog,
-            demoState: state.demoState,
-            pendingApproval: {
-              toolCallId: state.approvalRequest.toolCallId,
-              approved,
-            },
-          }),
+        const lastUserMessage =
+          state.chatMessages.filter((m) => m.role === 'user').pop()?.content ?? '';
+
+        const result = await runWorkflow({
+          userMessage: lastUserMessage,
+          conversationHistory: state.chatMessages.slice(0, -1).map((m) => ({
+            role: m.role,
+            content: m.content,
+          })),
+          settings: state.settings,
+          promptConfig: state.promptConfig,
+          toolCatalog: state.toolCatalog,
+          demoState: state.demoState,
+          pendingApproval: {
+            toolCallId: state.approvalRequest.toolCallId,
+            approved,
+          },
         });
-
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ error: 'Request failed' }));
-          throw new Error(err.error ?? `HTTP ${res.status}`);
-        }
-
-        const data: ChatResponseData = await res.json();
 
         const assistantMsg: ChatMessage = {
           id: crypto.randomUUID(),
           role: 'assistant',
-          content: data.message,
+          content: result.finalAnswer,
         };
         dispatch({ type: 'ADD_CHAT_MESSAGE', payload: assistantMsg });
-        dispatch({ type: 'ADD_TRACE', payload: data.trace });
-        dispatch({ type: 'UPDATE_DEMO_STATE', payload: data.updatedState });
-        dispatch({ type: 'SET_APPROVAL_REQUEST', payload: data.approvalRequest ?? null });
+        dispatch({ type: 'ADD_TRACE', payload: result.trace });
+        dispatch({ type: 'UPDATE_DEMO_STATE', payload: result.updatedState });
+        dispatch({ type: 'SET_APPROVAL_REQUEST', payload: result.approvalRequest ?? null });
       } catch (err) {
         dispatch({
           type: 'SET_ERROR',
@@ -155,25 +150,78 @@ export function useEvalRunner() {
       dispatch({ type: 'SET_EVAL_RESULTS', payload: [] });
 
       try {
-        const res = await fetch('/api/evals', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            cases,
-            settings: state.settings,
-            promptConfig: state.promptConfig,
-            toolCatalog: state.toolCatalog,
-          }),
-        });
+        const apiKey =
+          state.settings.provider === 'openai'
+            ? state.settings.openaiApiKey
+            : state.settings.anthropicApiKey;
 
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ error: 'Request failed' }));
-          throw new Error(err.error ?? `HTTP ${res.status}`);
+        if (!apiKey) {
+          throw new Error(`API key not configured for ${state.settings.provider}`);
         }
 
-        const data: { results: EvalResult[] } = await res.json();
-        dispatch({ type: 'SET_EVAL_RESULTS', payload: data.results });
-        setProgress({ current: cases.length, total: cases.length });
+        const results: EvalResult[] = [];
+
+        for (const evalCase of cases) {
+          const originalState = createSeedState();
+          const start = Date.now();
+
+          try {
+            const result = await runWorkflow({
+              userMessage: evalCase.userMessage,
+              conversationHistory: [],
+              settings: state.settings,
+              promptConfig: state.promptConfig,
+              toolCatalog: state.toolCatalog,
+              demoState: originalState,
+              pendingApproval: evalCase.expectations.destructiveSideEffectAllowed
+                ? { toolCallId: 'auto-approve', approved: true }
+                : null,
+            });
+
+            const scored = scoreEvalCase(
+              evalCase,
+              result.trace,
+              originalState,
+              result.updatedState,
+            );
+            scored.durationMs = Date.now() - start;
+            results.push(scored);
+          } catch (error) {
+            results.push({
+              caseId: evalCase.id,
+              passed: false,
+              actualRoute: null,
+              actualTools: [],
+              scores: {
+                routeMatch: false,
+                requiredToolsCalled: false,
+                forbiddenToolsAvoided: true,
+                approvalCorrect: false,
+                sideEffectCorrect: false,
+                mismatchDetected: false,
+              },
+              mismatchReason: `Error: ${error instanceof Error ? error.message : String(error)}`,
+              trace: {
+                id: crypto.randomUUID(),
+                startedAt: new Date(start).toISOString(),
+                completedAt: new Date().toISOString(),
+                userMessage: evalCase.userMessage,
+                route: null,
+                entries: [],
+                toolCalls: [],
+                mismatches: [],
+                finalAnswer: null,
+                stateChanges: [],
+              },
+              durationMs: Date.now() - start,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+
+          setProgress({ current: results.length, total: cases.length });
+        }
+
+        dispatch({ type: 'SET_EVAL_RESULTS', payload: results });
       } catch (err) {
         dispatch({
           type: 'SET_ERROR',
