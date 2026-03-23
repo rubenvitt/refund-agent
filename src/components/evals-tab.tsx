@@ -16,6 +16,9 @@ import {
   MessageSquarePlus,
   Save,
   Minus,
+  Sparkles,
+  Check,
+  X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -36,7 +39,7 @@ import {
 } from '@/components/ui/tooltip';
 import React, { useState, type ComponentProps } from 'react';
 import Markdown from 'react-markdown';
-import { useEvalRunner } from '@/lib/hooks';
+import { useEvalRunner, usePromptOptimizer } from '@/lib/hooks';
 import { evalCases } from '@/lib/eval-cases';
 import type {
   EvalCategory,
@@ -46,6 +49,7 @@ import type {
   HumanReview,
   HumanReviewDimensionId,
   HumanReviewVerdict,
+  PromptConfig,
 } from '@/lib/types';
 import { LLM_RUBRICS } from '@/lib/llm-grader';
 import { useAppState } from '@/lib/store';
@@ -418,6 +422,118 @@ const CODE_GRADERS: {
   },
 ];
 
+const PROMPT_LABELS: { key: keyof PromptConfig; label: string }[] = [
+  { key: 'orchestratorInstructions', label: 'Orchestrator' },
+  { key: 'refundAgentInstructions', label: 'Refund-Agent' },
+  { key: 'lookupAgentInstructions', label: 'Lookup-Agent' },
+  { key: 'accountFaqAgentInstructions', label: 'Account/FAQ-Agent' },
+];
+
+function PromptDiffPanel({
+  currentPrompts,
+  optimizedPrompts,
+  reasoning,
+  onApply,
+  onDismiss,
+}: {
+  currentPrompts: PromptConfig;
+  optimizedPrompts: PromptConfig;
+  reasoning: string;
+  onApply: () => void;
+  onDismiss: () => void;
+}) {
+  const [expandedPrompt, setExpandedPrompt] = useState<keyof PromptConfig | null>(null);
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <Sparkles className="size-4 text-amber-500" />
+            Optimierte Prompts
+          </CardTitle>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={onDismiss}>
+              <X className="size-3" />
+              Verwerfen
+            </Button>
+            <Button size="sm" onClick={onApply}>
+              <Check className="size-3" />
+              Übernehmen
+            </Button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="rounded-md bg-amber-500/5 border border-amber-500/20 p-3">
+          <div className="text-[10px] font-medium uppercase tracking-wider text-amber-600 dark:text-amber-400 mb-1">
+            Analyse
+          </div>
+          <p className="text-xs leading-relaxed text-foreground/80">{reasoning}</p>
+        </div>
+
+        {PROMPT_LABELS.map(({ key, label }) => {
+          const changed = currentPrompts[key] !== optimizedPrompts[key];
+          const isExpanded = expandedPrompt === key;
+          return (
+            <div key={key} className="rounded-lg border bg-card">
+              <button
+                type="button"
+                onClick={() => setExpandedPrompt(isExpanded ? null : key)}
+                className="flex w-full items-center gap-2 p-3 text-left text-xs hover:bg-muted/50 transition-colors"
+              >
+                {isExpanded ? (
+                  <ChevronDown className="size-3.5 shrink-0" />
+                ) : (
+                  <ChevronRight className="size-3.5 shrink-0" />
+                )}
+                <span className="font-medium">{label}</span>
+                {changed ? (
+                  <Badge className="bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[10px]">
+                    geändert
+                  </Badge>
+                ) : (
+                  <Badge variant="secondary" className="text-[10px]">
+                    unverändert
+                  </Badge>
+                )}
+              </button>
+              {isExpanded && (
+                <div className="border-t px-3 pb-3 pt-2 space-y-2">
+                  {changed ? (
+                    <>
+                      <div>
+                        <div className="text-[10px] font-medium uppercase tracking-wider text-red-500 mb-1">
+                          Vorher
+                        </div>
+                        <pre className="max-h-40 overflow-auto rounded-md bg-red-500/5 border border-red-500/10 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
+                          {currentPrompts[key]}
+                        </pre>
+                      </div>
+                      <div>
+                        <div className="text-[10px] font-medium uppercase tracking-wider text-green-500 mb-1">
+                          Nachher
+                        </div>
+                        <pre className="max-h-40 overflow-auto rounded-md bg-green-500/5 border border-green-500/10 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
+                          {optimizedPrompts[key]}
+                        </pre>
+                      </div>
+                    </>
+                  ) : (
+                    <pre className="max-h-40 overflow-auto rounded-md bg-muted/50 p-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
+                      {currentPrompts[key]}
+                    </pre>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </CardContent>
+    </Card>
+  );
+}
+
 const ALL_CATEGORIES: { value: EvalCategory | 'all'; label: string }[] = [
   { value: 'all', label: 'All' },
   { value: 'positive_refund', label: 'Positive Refund' },
@@ -429,7 +545,15 @@ const ALL_CATEGORIES: { value: EvalCategory | 'all'; label: string }[] = [
 
 export function EvalsTab() {
   const { runAll, runByCategory, runSingle, isRunning, progress, results } = useEvalRunner();
-  const { dispatch } = useAppState();
+  const { state, dispatch } = useAppState();
+  const {
+    optimize,
+    apply,
+    dismiss,
+    isOptimizing,
+    result: optimizationResult,
+    error: optimizationError,
+  } = usePromptOptimizer();
   const [activeFilter, setActiveFilter] = useState<EvalCategory | 'all'>('all');
   const [showGraders, setShowGraders] = useState(false);
   const [showLlmGraders, setShowLlmGraders] = useState(false);
@@ -677,7 +801,41 @@ export function EvalsTab() {
             {progress.current}/{progress.total}
           </div>
         )}
+
+        {/* Optimize Button */}
+        {results.length > 0 && results.some((r) => !r.passed) && !optimizationResult && (
+          <Button
+            variant="outline"
+            onClick={optimize}
+            disabled={isOptimizing || isRunning}
+          >
+            {isOptimizing ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Sparkles className="size-4" />
+            )}
+            {isOptimizing ? 'Optimiere Prompts…' : 'Prompts optimieren'}
+          </Button>
+        )}
       </div>
+
+      {/* Optimization Error */}
+      {optimizationError && (
+        <div className="rounded-md border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-600 dark:text-red-400">
+          Optimierung fehlgeschlagen: {optimizationError}
+        </div>
+      )}
+
+      {/* Optimization Result Preview */}
+      {optimizationResult && (
+        <PromptDiffPanel
+          currentPrompts={state.promptConfig}
+          optimizedPrompts={optimizationResult.prompts}
+          reasoning={optimizationResult.reasoning}
+          onApply={apply}
+          onDismiss={dismiss}
+        />
+      )}
 
       {/* Table */}
       <div>

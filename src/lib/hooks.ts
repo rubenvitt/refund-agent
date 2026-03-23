@@ -2,12 +2,13 @@
 
 import { useCallback, useState } from 'react';
 import { useAppState, type ChatMessage } from './store';
-import type { EvalCase, EvalResult } from './types';
+import type { EvalCase, EvalResult, PromptConfig } from './types';
 import { evalCases as defaultEvalCases } from './eval-cases';
 import { runWorkflow } from './workflow-engine';
 import { scoreEvalCase } from './eval-runner';
 import { createSeedState } from './seed-data';
 import { gradeWithLlm } from './llm-grader';
+import { optimizePrompts, type OptimizationResult } from './prompt-optimizer';
 
 export function useChat() {
   const { state, dispatch } = useAppState();
@@ -273,4 +274,54 @@ export function useEvalRunner() {
   );
 
   return { runAll, runByCategory, runSingle, isRunning, progress, results: state.evalResults };
+}
+
+export function usePromptOptimizer() {
+  const { state, dispatch } = useAppState();
+  const [isOptimizing, setIsOptimizing] = useState(false);
+  const [result, setResult] = useState<OptimizationResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const optimize = useCallback(async () => {
+    setIsOptimizing(true);
+    setError(null);
+    setResult(null);
+
+    try {
+      const apiKey =
+        state.settings.provider === 'openai'
+          ? state.settings.openaiApiKey
+          : state.settings.anthropicApiKey;
+
+      if (!apiKey) {
+        throw new Error(`API key not configured for ${state.settings.provider}`);
+      }
+
+      const optimized = await optimizePrompts(
+        state.promptConfig,
+        state.evalResults,
+        defaultEvalCases,
+        state.settings,
+      );
+
+      setResult(optimized);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Optimization failed');
+    } finally {
+      setIsOptimizing(false);
+    }
+  }, [state.settings, state.promptConfig, state.evalResults]);
+
+  const apply = useCallback(() => {
+    if (!result) return;
+    dispatch({ type: 'UPDATE_PROMPT_CONFIG', payload: result.prompts });
+    setResult(null);
+  }, [result, dispatch]);
+
+  const dismiss = useCallback(() => {
+    setResult(null);
+    setError(null);
+  }, []);
+
+  return { optimize, apply, dismiss, isOptimizing, result, error };
 }
