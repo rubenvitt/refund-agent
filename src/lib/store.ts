@@ -8,6 +8,7 @@ import type {
   ToolCatalog,
   RunTrace,
   EvalResult,
+  HumanReview,
   ApprovalRequest,
 } from './types';
 import { createSeedState } from './seed-data';
@@ -70,6 +71,7 @@ export type AppAction =
   | { type: 'ADD_TRACE'; payload: RunTrace }
   | { type: 'SET_TRACES'; payload: RunTrace[] }
   | { type: 'SET_EVAL_RESULTS'; payload: EvalResult[] }
+  | { type: 'SET_HUMAN_REVIEW'; payload: HumanReview }
   | { type: 'SET_ACTIVE_TAB'; payload: string }
   | { type: 'SET_LOADING'; payload: boolean }
   | { type: 'SET_ERROR'; payload: string | null }
@@ -97,6 +99,15 @@ function reducer(state: AppState, action: AppAction): AppState {
       return { ...state, traces: action.payload };
     case 'SET_EVAL_RESULTS':
       return { ...state, evalResults: action.payload };
+    case 'SET_HUMAN_REVIEW':
+      return {
+        ...state,
+        evalResults: state.evalResults.map((r) =>
+          r.caseId === action.payload.caseId
+            ? { ...r, humanReview: action.payload }
+            : r
+        ),
+      };
     case 'SET_ACTIVE_TAB':
       return { ...state, activeTab: action.payload };
     case 'SET_LOADING':

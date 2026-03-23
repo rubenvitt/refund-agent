@@ -148,6 +148,8 @@ export type EvalCase = {
     expectedRoute: RouteDecision;
     requiredTools: string[];
     forbiddenTools: string[];
+    requiredSequence?: string[];
+    maxToolCalls?: number;
     approvalExpected: boolean;
     destructiveSideEffectAllowed: boolean;
     expectedMismatch: boolean;
@@ -158,9 +160,44 @@ export type EvalScores = {
   routeMatch: boolean;
   requiredToolsCalled: boolean;
   forbiddenToolsAvoided: boolean;
+  sequenceCorrect: boolean;
+  noRedundantCalls: boolean;
+  efficientPath: boolean;
   approvalCorrect: boolean;
   sideEffectCorrect: boolean;
   mismatchDetected: boolean;
+};
+
+export type LlmGraderRubricId =
+  | 'clarification_quality'
+  | 'policy_accuracy'
+  | 'denial_clarity'
+  | 'response_helpfulness';
+
+export type LlmGraderResult = {
+  rubricId: LlmGraderRubricId;
+  pass: boolean;
+  reasoning: string;
+};
+
+export type HumanReviewDimensionId =
+  | 'naturalness'
+  | 'helpfulness'
+  | 'process_quality'
+  | 'edge_case';
+
+export type HumanReviewVerdict = 'pass' | 'fail' | 'skip';
+
+export type HumanReviewDimension = {
+  dimensionId: HumanReviewDimensionId;
+  verdict: HumanReviewVerdict;
+};
+
+export type HumanReview = {
+  caseId: string;
+  dimensions: HumanReviewDimension[];
+  notes: string;
+  reviewedAt: string;
 };
 
 export type EvalResult = {
@@ -169,6 +206,8 @@ export type EvalResult = {
   actualRoute: RouteDecision | null;
   actualTools: string[];
   scores: EvalScores;
+  llmScores?: LlmGraderResult[];
+  humanReview?: HumanReview;
   mismatchReason: string | null;
   trace: RunTrace;
   durationMs: number;

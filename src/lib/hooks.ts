@@ -7,6 +7,7 @@ import { evalCases as defaultEvalCases } from './eval-cases';
 import { runWorkflow } from './workflow-engine';
 import { scoreEvalCase } from './eval-runner';
 import { createSeedState } from './seed-data';
+import { gradeWithLlm } from './llm-grader';
 
 export function useChat() {
   const { state, dispatch } = useAppState();
@@ -184,6 +185,22 @@ export function useEvalRunner() {
               originalState,
               result.updatedState,
             );
+
+            // LLM-based grading (runs in parallel per rubric)
+            if (result.finalAnswer) {
+              try {
+                scored.llmScores = await gradeWithLlm(
+                  evalCase.category,
+                  evalCase.userMessage,
+                  result.finalAnswer,
+                  state.settings,
+                );
+              } catch {
+                // LLM grading is best-effort — don't fail the eval
+                scored.llmScores = [];
+              }
+            }
+
             scored.durationMs = Date.now() - start;
             results.push(scored);
           } catch (error) {
@@ -196,6 +213,9 @@ export function useEvalRunner() {
                 routeMatch: false,
                 requiredToolsCalled: false,
                 forbiddenToolsAvoided: true,
+                sequenceCorrect: false,
+                noRedundantCalls: true,
+                efficientPath: true,
                 approvalCorrect: false,
                 sideEffectCorrect: false,
                 mismatchDetected: false,
@@ -236,6 +256,14 @@ export function useEvalRunner() {
 
   const runAll = useCallback(() => runCases(defaultEvalCases), [runCases]);
 
+  const runByCategory = useCallback(
+    (category: EvalCase['category']) => {
+      const filtered = defaultEvalCases.filter((ec) => ec.category === category);
+      if (filtered.length > 0) runCases(filtered);
+    },
+    [runCases],
+  );
+
   const runSingle = useCallback(
     (caseId: string) => {
       const c = defaultEvalCases.find((ec) => ec.id === caseId);
@@ -244,5 +272,5 @@ export function useEvalRunner() {
     [runCases],
   );
 
-  return { runAll, runSingle, isRunning, progress, results: state.evalResults };
+  return { runAll, runByCategory, runSingle, isRunning, progress, results: state.evalResults };
 }

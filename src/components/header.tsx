@@ -11,18 +11,22 @@ export function Header() {
   const [isDark, setIsDark] = useState(false);
 
   useEffect(() => {
-    setIsDark(document.documentElement.classList.contains('dark'));
+    const stored = localStorage.getItem('theme');
+    const prefersDark =
+      stored === 'dark' ||
+      (!stored && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    if (prefersDark) {
+      document.documentElement.classList.add('dark');
+    }
+    setIsDark(prefersDark);
   }, []);
 
   const toggleTheme = useCallback(() => {
     const html = document.documentElement;
-    if (html.classList.contains('dark')) {
-      html.classList.remove('dark');
-      setIsDark(false);
-    } else {
-      html.classList.add('dark');
-      setIsDark(true);
-    }
+    const next = !html.classList.contains('dark');
+    html.classList.toggle('dark', next);
+    localStorage.setItem('theme', next ? 'dark' : 'light');
+    setIsDark(next);
   }, []);
 
   return (

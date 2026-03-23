@@ -28,6 +28,39 @@ export function scoreEvalCase(
     (tool) => !actualToolNames.includes(tool)
   );
 
+  // 3b. Sequence correct — deterministic ordering check
+  let sequenceCorrect: boolean;
+  if (expectations.requiredSequence && expectations.requiredSequence.length > 0) {
+    // Filter actual calls to only those in the required sequence
+    const relevantCalls = actualToolNames.filter((t) =>
+      expectations.requiredSequence!.includes(t)
+    );
+    // Check that the first occurrence of each required tool appears in order
+    const firstOccurrences = expectations.requiredSequence.map((t) =>
+      actualToolNames.indexOf(t)
+    );
+    sequenceCorrect =
+      firstOccurrences.every((idx) => idx !== -1) &&
+      firstOccurrences.every((idx, i) => i === 0 || idx > firstOccurrences[i - 1]);
+  } else {
+    sequenceCorrect = true; // no sequence requirement
+  }
+
+  // 3c. No redundant calls — same tool + identical args called more than once
+  const callSignatures = trace.toolCalls.map(
+    (tc) => `${tc.toolName}::${JSON.stringify(tc.arguments)}`
+  );
+  const noRedundantCalls =
+    callSignatures.length === new Set(callSignatures).size;
+
+  // 3d. Efficient path — actual call count within budget
+  let efficientPath: boolean;
+  if (expectations.maxToolCalls != null) {
+    efficientPath = trace.toolCalls.length <= expectations.maxToolCalls;
+  } else {
+    efficientPath = true; // no budget set
+  }
+
   // 4. Approval correct
   let approvalCorrect: boolean;
   if (expectations.approvalExpected) {
@@ -77,6 +110,9 @@ export function scoreEvalCase(
     routeMatch,
     requiredToolsCalled,
     forbiddenToolsAvoided,
+    sequenceCorrect,
+    noRedundantCalls,
+    efficientPath,
     approvalCorrect,
     sideEffectCorrect,
     mismatchDetected,
@@ -104,6 +140,24 @@ export function scoreEvalCase(
         actualToolNames.includes(t)
       );
       reasons.push(`Forbidden tools used: ${used.join(', ')}`);
+    }
+    if (!sequenceCorrect) {
+      const seq = expectations.requiredSequence ?? [];
+      const actualOrder = actualToolNames.filter((t) => seq.includes(t));
+      reasons.push(
+        `Sequence violation: expected [${seq.join(' → ')}], got [${actualOrder.join(' → ')}]`
+      );
+    }
+    if (!noRedundantCalls) {
+      const dupes = callSignatures.filter(
+        (sig, i) => callSignatures.indexOf(sig) !== i
+      );
+      reasons.push(`Redundant tool calls: ${dupes.join(', ')}`);
+    }
+    if (!efficientPath) {
+      reasons.push(
+        `Path too long: ${trace.toolCalls.length} calls (max ${expectations.maxToolCalls})`
+      );
     }
     if (!approvalCorrect) {
       reasons.push(
