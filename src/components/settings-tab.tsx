@@ -56,7 +56,6 @@ export function SettingsTab() {
   const { state, dispatch } = useAppState();
   const { settings } = state;
   const [showOpenaiKey, setShowOpenaiKey] = useState(false);
-  const [showAnthropicKey, setShowAnthropicKey] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   const updateSettings = (patch: Partial<typeof settings>) => {
@@ -66,6 +65,7 @@ export function SettingsTab() {
   const handleProviderChange = (value: string | null) => {
     if (!value) return;
     const provider = value as Provider;
+    if (provider === 'anthropic') return; // CORS – not available in browser
     updateSettings({
       provider,
       modelId: MODEL_DEFAULTS[provider],
@@ -108,7 +108,7 @@ export function SettingsTab() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="openai">OpenAI</SelectItem>
-                  <SelectItem value="anthropic">Anthropic</SelectItem>
+                  <SelectItem value="anthropic" disabled>Anthropic (CORS – nur serverseitig)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -172,36 +172,20 @@ export function SettingsTab() {
 
             <Separator />
 
-            {/* Anthropic Key */}
-            <div className="space-y-2">
+            {/* Anthropic Key – disabled due to CORS */}
+            <div className="space-y-2 opacity-50">
               <div className="flex items-center gap-2">
                 <Label htmlFor="anthropicKey">Anthropic API Key</Label>
-                <KeyIndicator hasKey={!!settings.anthropicApiKey} />
+                <Badge variant="outline" className="text-xs">CORS – deaktiviert</Badge>
               </div>
-              <div className="flex gap-2">
-                <Input
-                  id="anthropicKey"
-                  type={showAnthropicKey ? 'text' : 'password'}
-                  value={settings.anthropicApiKey}
-                  onChange={(e) =>
-                    updateSettings({ anthropicApiKey: e.target.value })
-                  }
-                  placeholder="sk-ant-..."
-                  className="w-[400px] font-mono"
-                />
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setShowAnthropicKey(!showAnthropicKey)}
-                  aria-label={showAnthropicKey ? 'Hide key' : 'Show key'}
-                >
-                  {showAnthropicKey ? (
-                    <EyeOff className="size-4" />
-                  ) : (
-                    <Eye className="size-4" />
-                  )}
-                </Button>
-              </div>
+              <Input
+                id="anthropicKey"
+                type="password"
+                value=""
+                disabled
+                placeholder="Nicht verfügbar im Browser (CORS)"
+                className="w-[400px] font-mono"
+              />
             </div>
           </CardContent>
         </Card>
