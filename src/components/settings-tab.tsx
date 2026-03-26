@@ -35,8 +35,8 @@ import { useAppState } from '@/lib/store';
 import type { Provider } from '@/lib/types';
 
 const MODEL_DEFAULTS: Record<Provider, string> = {
-  openai: 'gpt-4o-mini',
-  anthropic: 'claude-sonnet-4-20250514',
+  openai: 'gpt-5.4-nano',
+  anthropic: 'claude-sonnet-4-6',
 };
 
 function KeyIndicator({ hasKey }: { hasKey: boolean }) {
