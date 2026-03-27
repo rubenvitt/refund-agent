@@ -5,6 +5,8 @@ import { Shield, Moon, Sun } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useSettings } from '@/lib/store';
+import { SessionSelector } from '@/components/session-selector';
+import { Separator } from '@/components/ui/separator';
 
 export function Header() {
   const { settings } = useSettings();
@@ -39,6 +41,8 @@ export function Header() {
       </div>
 
       <div className="ml-auto flex items-center gap-3">
+        <SessionSelector />
+        <Separator orientation="vertical" className="h-5" />
         <Badge variant="outline" className="font-mono text-xs">
           {settings.provider === 'openai' ? 'OpenAI' : 'Anthropic'}
         </Badge>
