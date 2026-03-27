@@ -53,6 +53,44 @@ export type AuditLogEntry = {
   agentId: string;
 };
 
+export type AuditActor =
+  | { type: 'user' }
+  | { type: 'agent'; agentId: string }
+  | { type: 'system'; component: string };
+
+export type AuditOutcome =
+  | 'requested'
+  | 'approved'
+  | 'denied'
+  | 'completed'
+  | 'failed'
+  | 'skipped';
+
+export type AuditToolArguments =
+  | { redacted: true; reason: string }
+  | Record<string, unknown>;
+
+export type StructuredAuditEntry = {
+  id: string;
+  requestId: string;
+  toolCallId: string;
+  idempotencyKey: string | null;
+  actor: AuditActor;
+  subject: string | null;
+  toolName: string;
+  toolDefinitionVersion: string;
+  arguments: AuditToolArguments;
+  approvalId: string | null;
+  approvalOutcome: 'approved' | 'denied' | null;
+  outcome: AuditOutcome;
+  outcomeDetail: string | null;
+  requestedAt: string;
+  completedAt: string | null;
+  modelId: string;
+  modelProvider: string;
+  promptVersion: string;
+};
+
 export type ToolDefinition = {
   name: string;
   description: string;
@@ -77,6 +115,7 @@ export type DemoState = {
   orders: Order[];
   refundEvents: RefundEvent[];
   auditLog: AuditLogEntry[];
+  structuredAuditLog: StructuredAuditEntry[];
 };
 
 // ── Trace ──
@@ -91,6 +130,7 @@ export type ToolCallTrace = {
   timestamp: string;
   approvalRequired: boolean;
   approvalStatus: 'approved' | 'denied' | 'not_required' | 'pending';
+  auditEntryId: string | null;
 };
 
 export type MismatchAlert = {
@@ -119,6 +159,7 @@ export type TraceEntry = {
 
 export type RunTrace = {
   id: string;
+  requestId: string;
   startedAt: string;
   completedAt: string | null;
   userMessage: string;
@@ -128,6 +169,7 @@ export type RunTrace = {
   mismatches: MismatchAlert[];
   finalAnswer: string | null;
   stateChanges: Array<{ field: string; before: unknown; after: unknown }>;
+  auditEntryIds: string[];
 };
 
 // ── Evals ──
