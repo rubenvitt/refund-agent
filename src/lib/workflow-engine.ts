@@ -16,6 +16,7 @@ import type {
   AuditOutcome,
   PolicyGateContext,
   ToolCallLedger,
+  UserSession,
 } from './types';
 import { executeTool } from './tools';
 import {
@@ -27,6 +28,7 @@ import {
 } from './audit';
 import { TOOL_SCHEMAS } from './tool-schemas';
 import { evaluatePolicyGate, getAllowedToolsForRoute } from './policy-gate';
+import { evaluateAuthForToolCall } from './auth-gate';
 import {
   generateIdempotencyKey,
   checkIdempotency,
@@ -43,6 +45,7 @@ type WorkflowInput = {
   demoState: DemoState;
   toolCallLedger: ToolCallLedger;
   pendingApproval?: { toolCallId: string; approved: boolean } | null;
+  session: UserSession | null;
 };
 
 type WorkflowResult = {
@@ -320,6 +323,7 @@ export async function runWorkflow(
     demoState,
     toolCallLedger,
     pendingApproval,
+    session,
   } = input;
 
   const requestId = generatePrefixedId('req');
@@ -488,6 +492,59 @@ export async function runWorkflow(
             },
             route!
           );
+
+          // ── Auth check (BFLA then BOLA) ──
+          const authResult = evaluateAuthForToolCall(name, args, session, currentState);
+          if (!authResult.allowed) {
+            addTraceEntry(
+              traceEntries,
+              'auth_denial',
+              {
+                toolCallId,
+                toolName: name,
+                checkType: authResult.checkType,
+                reason: authResult.reason,
+              },
+              route!
+            );
+
+            // Create audit entry for auth denial
+            const authDeniedAuditEntry: StructuredAuditEntry = {
+              id: generatePrefixedId('ae'),
+              requestId,
+              toolCallId,
+              idempotencyKey: null,
+              actor: { type: 'agent', agentId: route! },
+              subject: resolveSubject(name, args, currentState),
+              toolName: name,
+              toolDefinitionVersion: hashToolDef(toolCatalog, name),
+              arguments: redactArgs(name, args),
+              approvalId: null,
+              approvalOutcome: null,
+              outcome: 'denied',
+              outcomeDetail: `auth_${authResult.checkType}: ${authResult.reason}`,
+              requestedAt: timestamp,
+              completedAt: new Date().toISOString(),
+              modelId: settings.modelId,
+              modelProvider: settings.provider,
+              promptVersion,
+            };
+            auditEntries.push(authDeniedAuditEntry);
+
+            const authDeniedTrace: ToolCallTrace = {
+              id: toolCallId,
+              toolName: name,
+              arguments: args,
+              result: { authorization_denied: true, reason: authResult.reason },
+              timestamp,
+              approvalRequired: false,
+              approvalStatus: 'auth_denied',
+              auditEntryId: authDeniedAuditEntry.id,
+            };
+            toolCallTraces.push(authDeniedTrace);
+
+            return { authorization_denied: true, reason: authResult.reason };
+          }
 
           // ── Policy Gate ──
           const gateCtx: PolicyGateContext = {
