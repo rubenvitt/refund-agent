@@ -8,6 +8,7 @@ import {
   RotateCcw,
   AlertTriangle,
   ShieldAlert,
+  ShieldX,
   CheckCircle2,
   XCircle,
   Bot,
@@ -74,6 +75,12 @@ function approvalStatusBadge(status: string) {
       return (
         <Badge className="bg-amber-500/10 text-amber-600 dark:text-amber-400">
           <Loader2 className="size-3 animate-spin" /> Pending
+        </Badge>
+      );
+    case 'gate_denied':
+      return (
+        <Badge className="bg-red-500/10 text-red-600 dark:text-red-400">
+          <ShieldX className="size-3" /> Gate Denied
         </Badge>
       );
     default:
