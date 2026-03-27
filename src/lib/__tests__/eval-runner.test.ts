@@ -6,6 +6,7 @@ import type { EvalCase, RunTrace, ToolCallTrace } from '../types';
 function makeTrace(overrides: Partial<RunTrace> = {}): RunTrace {
   return {
     id: 'test-trace',
+    requestId: crypto.randomUUID(),
     startedAt: new Date().toISOString(),
     completedAt: new Date().toISOString(),
     userMessage: 'test',
@@ -15,6 +16,7 @@ function makeTrace(overrides: Partial<RunTrace> = {}): RunTrace {
     mismatches: [],
     finalAnswer: 'test answer',
     stateChanges: [],
+    auditEntryIds: [],
     ...overrides,
   };
 }
@@ -28,6 +30,7 @@ function makeToolCall(name: string, overrides: Partial<ToolCallTrace> = {}): Too
     timestamp: new Date().toISOString(),
     approvalRequired: false,
     approvalStatus: 'not_required',
+    auditEntryId: null,
     ...overrides,
   };
 }

@@ -54,6 +54,9 @@ export function useChat() {
         };
         dispatch({ type: 'ADD_CHAT_MESSAGE', payload: assistantMsg });
         dispatch({ type: 'ADD_TRACE', payload: result.trace });
+        if (result.auditEntries.length > 0) {
+          dispatch({ type: 'ADD_AUDIT_ENTRIES', payload: result.auditEntries });
+        }
         dispatch({ type: 'UPDATE_DEMO_STATE', payload: result.updatedState });
 
         if (result.approvalRequest) {
@@ -117,6 +120,9 @@ export function useApproval() {
         };
         dispatch({ type: 'ADD_CHAT_MESSAGE', payload: assistantMsg });
         dispatch({ type: 'ADD_TRACE', payload: result.trace });
+        if (result.auditEntries.length > 0) {
+          dispatch({ type: 'ADD_AUDIT_ENTRIES', payload: result.auditEntries });
+        }
         dispatch({ type: 'UPDATE_DEMO_STATE', payload: result.updatedState });
         dispatch({ type: 'SET_APPROVAL_REQUEST', payload: result.approvalRequest ?? null });
       } catch (err) {
@@ -224,6 +230,7 @@ export function useEvalRunner() {
               mismatchReason: `Error: ${error instanceof Error ? error.message : String(error)}`,
               trace: {
                 id: crypto.randomUUID(),
+                requestId: crypto.randomUUID(),
                 startedAt: new Date(start).toISOString(),
                 completedAt: new Date().toISOString(),
                 userMessage: evalCase.userMessage,
@@ -233,6 +240,7 @@ export function useEvalRunner() {
                 mismatches: [],
                 finalAnswer: null,
                 stateChanges: [],
+                auditEntryIds: [],
               },
               durationMs: Date.now() - start,
               error: error instanceof Error ? error.message : String(error),
