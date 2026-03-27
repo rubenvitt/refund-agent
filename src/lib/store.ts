@@ -12,6 +12,7 @@ import type {
   ApprovalRequest,
   StructuredAuditEntry,
   ToolCallLedger,
+  UserSession,
 } from './types';
 import { createSeedState } from './seed-data';
 import { createEmptyLedger } from './idempotency';
@@ -40,6 +41,7 @@ export type AppState = {
   approvalRequest: ApprovalRequest | null;
   chatMessages: ChatMessage[];
   toolCallLedger: ToolCallLedger;
+  session: UserSession | null;
 };
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -63,6 +65,7 @@ function getInitialState(): AppState {
     approvalRequest: null,
     chatMessages: [],
     toolCallLedger: createEmptyLedger(),
+    session: null,
   };
 }
 
@@ -90,7 +93,8 @@ export type AppAction =
   | { type: 'ADD_AUDIT_ENTRIES'; payload: StructuredAuditEntry[] }
   | { type: 'CLEAR_AUDIT_LOG' }
   | { type: 'UPDATE_LEDGER'; payload: ToolCallLedger }
-  | { type: 'CLEAR_LEDGER' };
+  | { type: 'CLEAR_LEDGER' }
+  | { type: 'SET_SESSION'; payload: UserSession | null };
 
 function reducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
@@ -160,6 +164,8 @@ function reducer(state: AppState, action: AppAction): AppState {
       return { ...state, toolCallLedger: action.payload };
     case 'CLEAR_LEDGER':
       return { ...state, toolCallLedger: createEmptyLedger() };
+    case 'SET_SESSION':
+      return { ...state, session: action.payload };
     default:
       return state;
   }
@@ -201,6 +207,7 @@ function saveToLocalStorage(state: AppState) {
       promptConfig: state.promptConfig,
       toolCatalog: state.toolCatalog,
       traces: state.traces.slice(0, 50),
+      session: state.session,
     };
     localStorage.setItem(LS_KEY, JSON.stringify(toSave));
   } catch {
@@ -267,6 +274,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (saved.promptConfig) dispatch({ type: 'UPDATE_PROMPT_CONFIG', payload: saved.promptConfig });
       if (saved.toolCatalog) dispatch({ type: 'UPDATE_TOOL_CATALOG', payload: saved.toolCatalog });
       if (saved.traces) dispatch({ type: 'SET_TRACES', payload: saved.traces as RunTrace[] });
+      if ((saved as Record<string, unknown>).session) {
+        dispatch({ type: 'SET_SESSION', payload: (saved as Record<string, unknown>).session as UserSession });
+      }
     }
     const auditLog = loadAuditLog();
     if (auditLog.length > 0) {
@@ -325,5 +335,14 @@ export function useDemoState() {
     demoState: state.demoState,
     updateDemoState: (s: DemoState) => dispatch({ type: 'UPDATE_DEMO_STATE', payload: s }),
     resetDemoState: () => dispatch({ type: 'RESET_DEMO_STATE' }),
+  };
+}
+
+export function useSession() {
+  const { state, dispatch } = useAppState();
+  return {
+    session: state.session,
+    setSession: (session: UserSession | null) =>
+      dispatch({ type: 'SET_SESSION', payload: session }),
   };
 }
