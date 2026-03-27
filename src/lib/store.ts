@@ -229,7 +229,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const saved = loadFromLocalStorage();
     if (saved) {
       if (saved.settings) dispatch({ type: 'UPDATE_SETTINGS', payload: saved.settings });
-      if (saved.demoState) dispatch({ type: 'UPDATE_DEMO_STATE', payload: saved.demoState });
+      if (saved.demoState) dispatch({ type: 'UPDATE_DEMO_STATE', payload: {
+        ...saved.demoState,
+        structuredAuditLog: (saved.demoState as DemoState).structuredAuditLog ?? [],
+      } });
       if (saved.promptConfig) dispatch({ type: 'UPDATE_PROMPT_CONFIG', payload: saved.promptConfig });
       if (saved.toolCatalog) dispatch({ type: 'UPDATE_TOOL_CATALOG', payload: saved.toolCatalog });
       if (saved.traces) dispatch({ type: 'SET_TRACES', payload: saved.traces as RunTrace[] });
