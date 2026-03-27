@@ -14,6 +14,7 @@ import type {
   MismatchAlert,
   StructuredAuditEntry,
   AuditOutcome,
+  PolicyGateContext,
 } from './types';
 import { executeTool } from './tools';
 import {
@@ -24,6 +25,7 @@ import {
   resolveSubject,
 } from './audit';
 import { TOOL_SCHEMAS } from './tool-schemas';
+import { evaluatePolicyGate, getAllowedToolsForRoute } from './policy-gate';
 
 type WorkflowInput = {
   userMessage: string;
@@ -91,21 +93,6 @@ function getAgentInstructions(
       return promptConfig.accountFaqAgentInstructions;
     case 'clarify':
       return 'Ask the user to clarify their request. Be polite and specific about what information you need.';
-  }
-}
-
-function getToolsForRoute(route: RouteDecision): string[] {
-  switch (route) {
-    case 'refund':
-      return ['lookup_order', 'verify_customer', 'refund_order', 'faq_search'];
-    case 'lookup':
-      return ['lookup_order', 'faq_search'];
-    case 'faq':
-      return ['faq_search'];
-    case 'account':
-      return ['verify_customer', 'reset_password', 'faq_search'];
-    case 'clarify':
-      return [];
   }
 }
 
@@ -335,6 +322,7 @@ export async function runWorkflow(
   let approvalRequest: WorkflowResult['approvalRequest'] = null;
   const auditEntries: StructuredAuditEntry[] = [];
   const promptVersion = hashPromptConfig(promptConfig);
+  const toolCallCounts: Record<string, number> = {};
 
   const model = createModel(settings);
 
@@ -449,7 +437,7 @@ export async function runWorkflow(
     }
   } else {
     // Determine which tools this agent route may use
-    const allowedToolNames = getToolsForRoute(route);
+    const allowedToolNames = getAllowedToolsForRoute(route);
     const { toolDefs, toolMeta } = buildToolSchemas(
       toolCatalog,
       allowedToolNames
@@ -490,8 +478,92 @@ export async function runWorkflow(
             route!
           );
 
-          // Check if this tool requires approval
-          if (meta.requiresApproval) {
+          // ── Policy Gate ──
+          const gateCtx: PolicyGateContext = {
+            requestId,
+            toolCallId,
+            route: route!,
+            toolName: name,
+            args,
+            demoState: currentState,
+            toolCallCounts,
+            toolCatalog,
+          };
+
+          const gateOutcome = evaluatePolicyGate(gateCtx);
+
+          if (gateOutcome.decision === 'deny') {
+            addTraceEntry(
+              traceEntries,
+              'gate_deny',
+              {
+                toolCallId,
+                toolName: name,
+                category: gateOutcome.category,
+                reason: gateOutcome.reason,
+                technicalDetail: gateOutcome.technicalDetail ?? null,
+              },
+              route!
+            );
+
+            // Create audit entry for gate denial
+            const deniedAuditEntry: StructuredAuditEntry = {
+              id: generatePrefixedId('ae'),
+              requestId,
+              toolCallId,
+              idempotencyKey: null,
+              actor: { type: 'agent', agentId: route! },
+              subject: resolveSubject(name, args, currentState),
+              toolName: name,
+              toolDefinitionVersion: hashToolDef(toolCatalog, name),
+              arguments: redactArgs(name, args),
+              approvalId: null,
+              approvalOutcome: null,
+              outcome: 'skipped',
+              outcomeDetail: `Gate denied: ${gateOutcome.category} — ${gateOutcome.reason}`,
+              requestedAt: timestamp,
+              completedAt: new Date().toISOString(),
+              modelId: settings.modelId,
+              modelProvider: settings.provider,
+              promptVersion,
+            };
+            auditEntries.push(deniedAuditEntry);
+
+            const trace: ToolCallTrace = {
+              id: toolCallId,
+              toolName: name,
+              arguments: args,
+              result: { denied: true, reason: gateOutcome.reason, category: gateOutcome.category },
+              timestamp,
+              approvalRequired: false,
+              approvalStatus: 'gate_denied',
+              auditEntryId: deniedAuditEntry.id,
+            };
+            toolCallTraces.push(trace);
+
+            // Increment call count even for denials (to prevent infinite retry loops)
+            toolCallCounts[name] = (toolCallCounts[name] ?? 0) + 1;
+
+            return { denied: true, reason: gateOutcome.reason, category: gateOutcome.category };
+          }
+
+          // Gate passed — record gate_allow
+          addTraceEntry(
+            traceEntries,
+            'gate_allow',
+            {
+              toolCallId,
+              toolName: name,
+              decision: gateOutcome.decision,
+            },
+            route!
+          );
+
+          // Increment call count for successful gate passes
+          toolCallCounts[name] = (toolCallCounts[name] ?? 0) + 1;
+
+          // ── Approval Check (for require_approval decisions) ──
+          if (gateOutcome.decision === 'require_approval') {
             if (pendingApproval) {
               // We have an approval response from the user
               if (pendingApproval.approved) {
@@ -599,7 +671,7 @@ export async function runWorkflow(
             }
           }
 
-          // Execute the tool
+          // ── Execute the tool (decision === 'allow') ──
           const executedAt = new Date().toISOString();
           const toolResult = executeTool(name, currentState, args);
           const completedAt = new Date().toISOString();
