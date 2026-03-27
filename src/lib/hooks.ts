@@ -47,6 +47,7 @@ export function useChat() {
           toolCatalog: state.toolCatalog,
           demoState: state.demoState,
           toolCallLedger: state.toolCallLedger,
+          session: state.session,
         });
 
         const assistantMsg: ChatMessage = {
@@ -74,7 +75,7 @@ export function useChat() {
         setIsLoading(false);
       }
     },
-    [state.chatMessages, state.settings, state.promptConfig, state.toolCatalog, state.demoState, state.toolCallLedger, dispatch],
+    [state.chatMessages, state.settings, state.promptConfig, state.toolCatalog, state.demoState, state.toolCallLedger, state.session, dispatch],
   );
 
   const resetChat = useCallback(() => {
@@ -115,6 +116,7 @@ export function useApproval() {
             toolCallId: state.approvalRequest.toolCallId,
             approved,
           },
+          session: state.session,
         });
 
         const assistantMsg: ChatMessage = {
@@ -139,7 +141,7 @@ export function useApproval() {
         setIsLoading(false);
       }
     },
-    [state.approvalRequest, state.chatMessages, state.settings, state.promptConfig, state.toolCatalog, state.demoState, state.toolCallLedger, dispatch],
+    [state.approvalRequest, state.chatMessages, state.settings, state.promptConfig, state.toolCatalog, state.demoState, state.toolCallLedger, state.session, dispatch],
   );
 
   return {
@@ -190,6 +192,7 @@ export function useEvalRunner() {
               pendingApproval: evalCase.expectations.destructiveSideEffectAllowed
                 ? { toolCallId: 'auto-approve', approved: true }
                 : null,
+              session: null,
             });
 
             const scored = scoreEvalCase(
