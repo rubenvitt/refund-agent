@@ -19,6 +19,7 @@ import {
   AlertTriangle,
   Bot,
   ScrollText,
+  Ban,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -113,6 +114,13 @@ function entryConfig(type: TraceEntry['type']) {
         color: 'text-red-600 dark:text-red-400',
         bg: 'bg-red-500/10',
         label: 'Gate Deny',
+      };
+    case 'idempotency_block':
+      return {
+        icon: Ban,
+        color: 'text-violet-600 dark:text-violet-400',
+        bg: 'bg-violet-500/10',
+        label: 'Idempotency Block',
       };
     default:
       return {
