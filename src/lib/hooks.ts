@@ -9,6 +9,7 @@ import { scoreEvalCase } from './eval-runner';
 import { createSeedState } from './seed-data';
 import { gradeWithLlm } from './llm-grader';
 import { optimizePrompts, type OptimizationResult } from './prompt-optimizer';
+import { createEmptyLedger } from './idempotency';
 
 export function useChat() {
   const { state, dispatch } = useAppState();
@@ -45,6 +46,7 @@ export function useChat() {
           promptConfig: state.promptConfig,
           toolCatalog: state.toolCatalog,
           demoState: state.demoState,
+          toolCallLedger: state.toolCallLedger,
         });
 
         const assistantMsg: ChatMessage = {
@@ -55,6 +57,7 @@ export function useChat() {
         dispatch({ type: 'ADD_CHAT_MESSAGE', payload: assistantMsg });
         dispatch({ type: 'ADD_TRACE', payload: result.trace });
         dispatch({ type: 'UPDATE_DEMO_STATE', payload: result.updatedState });
+        dispatch({ type: 'UPDATE_LEDGER', payload: result.updatedLedger });
         if (result.auditEntries.length > 0) {
           dispatch({ type: 'ADD_AUDIT_ENTRIES', payload: result.auditEntries });
         }
@@ -71,7 +74,7 @@ export function useChat() {
         setIsLoading(false);
       }
     },
-    [state.chatMessages, state.settings, state.promptConfig, state.toolCatalog, state.demoState, dispatch],
+    [state.chatMessages, state.settings, state.promptConfig, state.toolCatalog, state.demoState, state.toolCallLedger, dispatch],
   );
 
   const resetChat = useCallback(() => {
@@ -107,6 +110,7 @@ export function useApproval() {
           promptConfig: state.promptConfig,
           toolCatalog: state.toolCatalog,
           demoState: state.demoState,
+          toolCallLedger: state.toolCallLedger,
           pendingApproval: {
             toolCallId: state.approvalRequest.toolCallId,
             approved,
@@ -121,6 +125,7 @@ export function useApproval() {
         dispatch({ type: 'ADD_CHAT_MESSAGE', payload: assistantMsg });
         dispatch({ type: 'ADD_TRACE', payload: result.trace });
         dispatch({ type: 'UPDATE_DEMO_STATE', payload: result.updatedState });
+        dispatch({ type: 'UPDATE_LEDGER', payload: result.updatedLedger });
         if (result.auditEntries.length > 0) {
           dispatch({ type: 'ADD_AUDIT_ENTRIES', payload: result.auditEntries });
         }
@@ -134,7 +139,7 @@ export function useApproval() {
         setIsLoading(false);
       }
     },
-    [state.approvalRequest, state.chatMessages, state.settings, state.promptConfig, state.toolCatalog, state.demoState, dispatch],
+    [state.approvalRequest, state.chatMessages, state.settings, state.promptConfig, state.toolCatalog, state.demoState, state.toolCallLedger, dispatch],
   );
 
   return {
@@ -181,6 +186,7 @@ export function useEvalRunner() {
               promptConfig: state.promptConfig,
               toolCatalog: state.toolCatalog,
               demoState: originalState,
+              toolCallLedger: createEmptyLedger(),
               pendingApproval: evalCase.expectations.destructiveSideEffectAllowed
                 ? { toolCallId: 'auto-approve', approved: true }
                 : null,
