@@ -13,6 +13,8 @@ import {
   Wrench,
   CheckCircle2,
   ShieldAlert,
+  ShieldCheck,
+  ShieldX,
   ArrowRightLeft,
   AlertTriangle,
   Bot,
@@ -97,6 +99,20 @@ function entryConfig(type: TraceEntry['type']) {
         color: 'text-blue-600 dark:text-blue-400',
         bg: 'bg-blue-500/10',
         label: 'Agent Response',
+      };
+    case 'gate_allow':
+      return {
+        icon: ShieldCheck,
+        color: 'text-emerald-600 dark:text-emerald-400',
+        bg: 'bg-emerald-500/10',
+        label: 'Gate Allow',
+      };
+    case 'gate_deny':
+      return {
+        icon: ShieldX,
+        color: 'text-red-600 dark:text-red-400',
+        bg: 'bg-red-500/10',
+        label: 'Gate Deny',
       };
     default:
       return {
@@ -245,11 +261,35 @@ function TraceCard({ trace }: { trace: RunTrace }) {
                         </Badge>
                       )}
                     </div>
-                    {Object.keys(entry.data).length > 0 && (
+                    {entry.type === 'gate_deny' ? (
+                      (() => {
+                        const d = entry.data as Record<string, unknown>;
+                        return (
+                          <div className="space-y-1 rounded bg-red-500/5 border border-red-500/20 p-1.5 text-xs">
+                            <div className="flex items-center gap-1.5">
+                              <Badge className="bg-red-500/10 text-red-600 dark:text-red-400 text-[10px]">
+                                {String(d.category)}
+                              </Badge>
+                              <span className="font-medium text-red-600 dark:text-red-400">
+                                {String(d.toolName)}
+                              </span>
+                            </div>
+                            <p className="text-red-600/80 dark:text-red-400/80">
+                              {String(d.reason)}
+                            </p>
+                            {d.technicalDetail ? (
+                              <pre className="mt-1 max-h-16 overflow-auto rounded bg-muted p-1 font-mono text-[10px] text-muted-foreground">
+                                {String(d.technicalDetail)}
+                              </pre>
+                            ) : null}
+                          </div>
+                        );
+                      })()
+                    ) : Object.keys(entry.data).length > 0 ? (
                       <pre className="max-h-24 overflow-auto rounded bg-muted p-1.5 font-mono text-xs">
                         {JSON.stringify(entry.data, null, 2)}
                       </pre>
-                    )}
+                    ) : null}
                     {entry.type === 'tool_call' && (() => {
                       const tc = trace.toolCalls.find(
                         (t) => t.id === (entry.data as Record<string, unknown>).toolCallId
