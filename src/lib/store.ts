@@ -10,6 +10,7 @@ import type {
   EvalResult,
   HumanReview,
   ApprovalRequest,
+  StructuredAuditEntry,
 } from './types';
 import { createSeedState } from './seed-data';
 import { defaultPromptConfig, defaultToolCatalog } from './default-prompts';
@@ -81,7 +82,9 @@ export type AppAction =
   | { type: 'RESET_DEMO_STATE' }
   | { type: 'RESET_PROMPT_CONFIG' }
   | { type: 'RESET_TOOL_CATALOG' }
-  | { type: 'RESET_ALL' };
+  | { type: 'RESET_ALL' }
+  | { type: 'ADD_AUDIT_ENTRIES'; payload: StructuredAuditEntry[] }
+  | { type: 'CLEAR_AUDIT_LOG' };
 
 function reducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
@@ -128,6 +131,25 @@ function reducer(state: AppState, action: AppAction): AppState {
       return { ...state, toolCatalog: defaultToolCatalog };
     case 'RESET_ALL':
       return getInitialState();
+    case 'ADD_AUDIT_ENTRIES':
+      return {
+        ...state,
+        demoState: {
+          ...state.demoState,
+          structuredAuditLog: [
+            ...state.demoState.structuredAuditLog,
+            ...action.payload,
+          ],
+        },
+      };
+    case 'CLEAR_AUDIT_LOG':
+      return {
+        ...state,
+        demoState: {
+          ...state.demoState,
+          structuredAuditLog: [],
+        },
+      };
     default:
       return state;
   }
@@ -145,6 +167,8 @@ const AppContext = createContext<AppContextValue | null>(null);
 // ── localStorage helpers ──
 
 const LS_KEY = 'support-agent-lab';
+const LS_KEY_AUDIT = 'support-agent-lab:audit';
+const MAX_AUDIT_ENTRIES = 200;
 
 function loadFromLocalStorage(): Partial<AppState> | null {
   if (typeof window === 'undefined') return null;
@@ -173,6 +197,27 @@ function saveToLocalStorage(state: AppState) {
   }
 }
 
+function saveAuditLog(entries: StructuredAuditEntry[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    const trimmed = entries.slice(-MAX_AUDIT_ENTRIES);
+    localStorage.setItem(LS_KEY_AUDIT, JSON.stringify(trimmed));
+  } catch {
+    // quota exceeded — silently ignore
+  }
+}
+
+function loadAuditLog(): StructuredAuditEntry[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(LS_KEY_AUDIT);
+    if (!raw) return [];
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+}
+
 // ── Provider ──
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
@@ -189,6 +234,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (saved.toolCatalog) dispatch({ type: 'UPDATE_TOOL_CATALOG', payload: saved.toolCatalog });
       if (saved.traces) dispatch({ type: 'SET_TRACES', payload: saved.traces as RunTrace[] });
     }
+    const auditLog = loadAuditLog();
+    if (auditLog.length > 0) {
+      dispatch({ type: 'ADD_AUDIT_ENTRIES', payload: auditLog });
+    }
     setHydrated(true);
   }, []);
 
@@ -197,6 +246,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!hydrated) return;
     saveToLocalStorage(state);
   }, [hydrated, state.settings, state.demoState, state.promptConfig, state.toolCatalog, state.traces]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    saveAuditLog(state.demoState.structuredAuditLog);
+  }, [hydrated, state.demoState.structuredAuditLog]);
 
   return React.createElement(
     AppContext.Provider,
