@@ -122,6 +122,13 @@ function entryConfig(type: TraceEntry['type']) {
         bg: 'bg-violet-500/10',
         label: 'Idempotency Block',
       };
+    case 'auth_denial':
+      return {
+        icon: ShieldX,
+        color: 'text-orange-600 dark:text-orange-400',
+        bg: 'bg-orange-500/10',
+        label: 'Auth Denial',
+      };
     default:
       return {
         icon: Cpu,
