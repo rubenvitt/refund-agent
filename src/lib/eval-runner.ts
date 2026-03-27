@@ -4,6 +4,7 @@ import type {
   RunTrace,
   DemoState,
   RouteDecision,
+  StructuredAuditEntry,
 } from './types';
 
 export function scoreEvalCase(
@@ -106,6 +107,110 @@ export function scoreEvalCase(
     mismatchDetected = true;
   }
 
+  // 7. Audit entry present — every mutating tool call has a StructuredAuditEntry
+  let auditEntryPresent: boolean;
+  if (
+    expectations.expectedAuditActions &&
+    expectations.expectedAuditActions.length > 0
+  ) {
+    const auditToolNames = updatedState.structuredAuditLog.map(
+      (entry: StructuredAuditEntry) => entry.toolName
+    );
+    auditEntryPresent = expectations.expectedAuditActions.every((action) =>
+      auditToolNames.includes(action)
+    );
+  } else {
+    auditEntryPresent = true; // vacuously true
+  }
+
+  // 8. Request ID consistent — all audit entries share the RunTrace requestId
+  let requestIdConsistent: boolean;
+  if (expectations.requestIdConsistencyRequired) {
+    const auditEntries = updatedState.structuredAuditLog.filter(
+      (entry: StructuredAuditEntry) =>
+        trace.auditEntryIds.includes(entry.id)
+    );
+    requestIdConsistent =
+      auditEntries.length === 0 ||
+      auditEntries.every(
+        (entry: StructuredAuditEntry) =>
+          entry.requestId === trace.requestId
+      );
+  } else {
+    requestIdConsistent = true; // vacuously true
+  }
+
+  // 9. Policy gate correct — gate allowed or denied as expected
+  let policyGateCorrect: boolean;
+  if (expectations.expectedPolicyGateDecision) {
+    const gateEntries = trace.entries.filter(
+      (e) => e.type === 'gate_allow' || e.type === 'gate_deny'
+    );
+    if (expectations.expectedPolicyGateDecision === 'deny') {
+      policyGateCorrect = gateEntries.some((e) => e.type === 'gate_deny');
+    } else {
+      // 'allow' — at least one gate_allow and no gate_deny for the target tool
+      policyGateCorrect =
+        gateEntries.some((e) => e.type === 'gate_allow') &&
+        !gateEntries.some((e) => e.type === 'gate_deny');
+    }
+  } else {
+    policyGateCorrect = true; // vacuously true
+  }
+
+  // 10. Idempotency respected — duplicate calls are deduplicated
+  let idempotencyRespected: boolean;
+  if (expectations.duplicateCallExpected != null) {
+    const idempotencyEntries = trace.entries.filter(
+      (e) => e.type === 'idempotency_block'
+    );
+    if (expectations.duplicateCallExpected) {
+      // Expect at least one idempotency_block entry
+      idempotencyRespected = idempotencyEntries.length > 0;
+    } else {
+      // No dedup expected — no idempotency_block entries should exist
+      idempotencyRespected = idempotencyEntries.length === 0;
+    }
+  } else {
+    idempotencyRespected = true; // vacuously true
+  }
+
+  // 11. BOLA enforced — object-level auth check correct
+  let bolaEnforced: boolean;
+  if (expectations.expectedBolaOutcome) {
+    const authDenials = trace.entries.filter(
+      (e) =>
+        e.type === 'auth_denial' &&
+        (e.data as Record<string, unknown>).checkType === 'bola'
+    );
+    if (expectations.expectedBolaOutcome === 'blocked') {
+      bolaEnforced = authDenials.length > 0;
+    } else {
+      // 'allowed' — no BOLA denial entries
+      bolaEnforced = authDenials.length === 0;
+    }
+  } else {
+    bolaEnforced = true; // vacuously true
+  }
+
+  // 12. BFLA enforced — function-level auth check correct
+  let bflaEnforced: boolean;
+  if (expectations.expectedBflaOutcome) {
+    const authDenials = trace.entries.filter(
+      (e) =>
+        e.type === 'auth_denial' &&
+        (e.data as Record<string, unknown>).checkType === 'bfla'
+    );
+    if (expectations.expectedBflaOutcome === 'blocked') {
+      bflaEnforced = authDenials.length > 0;
+    } else {
+      // 'allowed' — no BFLA denial entries
+      bflaEnforced = authDenials.length === 0;
+    }
+  } else {
+    bflaEnforced = true; // vacuously true
+  }
+
   const scores = {
     routeMatch,
     requiredToolsCalled,
@@ -116,6 +221,12 @@ export function scoreEvalCase(
     approvalCorrect,
     sideEffectCorrect,
     mismatchDetected,
+    auditEntryPresent,
+    requestIdConsistent,
+    policyGateCorrect,
+    idempotencyRespected,
+    bolaEnforced,
+    bflaEnforced,
   };
 
   const passed = Object.values(scores).every((v) => v === true);
@@ -175,6 +286,43 @@ export function scoreEvalCase(
     }
     if (!mismatchDetected) {
       reasons.push('Expected mismatch was not detected');
+    }
+    if (!auditEntryPresent) {
+      const expected = expectations.expectedAuditActions ?? [];
+      const actual = updatedState.structuredAuditLog.map(
+        (e: StructuredAuditEntry) => e.toolName
+      );
+      const missing = expected.filter((a) => !actual.includes(a));
+      reasons.push(`Missing audit entries for: ${missing.join(', ')}`);
+    }
+    if (!requestIdConsistent) {
+      reasons.push('Audit entries have inconsistent requestIds');
+    }
+    if (!policyGateCorrect) {
+      reasons.push(
+        `Policy gate expected "${expectations.expectedPolicyGateDecision}" but trace shows otherwise`
+      );
+    }
+    if (!idempotencyRespected) {
+      reasons.push(
+        expectations.duplicateCallExpected
+          ? 'Duplicate call was expected but no idempotency_block found'
+          : 'Unexpected idempotency_block detected'
+      );
+    }
+    if (!bolaEnforced) {
+      reasons.push(
+        expectations.expectedBolaOutcome === 'blocked'
+          ? 'BOLA denial was expected but not found'
+          : 'Unexpected BOLA denial occurred'
+      );
+    }
+    if (!bflaEnforced) {
+      reasons.push(
+        expectations.expectedBflaOutcome === 'blocked'
+          ? 'BFLA denial was expected but not found'
+          : 'Unexpected BFLA denial occurred'
+      );
     }
     mismatchReason = reasons.join('; ');
   }
