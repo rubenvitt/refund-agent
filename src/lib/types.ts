@@ -184,7 +184,8 @@ export type TraceEntry = {
     | 'mismatch_alert'
     | 'agent_response'
     | 'gate_allow'
-    | 'gate_deny';
+    | 'gate_deny'
+    | 'idempotency_block';
   agentId?: string;
   data: Record<string, unknown>;
 };
@@ -287,6 +288,33 @@ export type EvalResult = {
   durationMs: number;
   error?: string;
 };
+
+// ── Idempotency ──
+
+export type LedgerEntry = {
+  idempotencyKey: string;
+  toolName: string;
+  semanticParams: Record<string, string>;
+  cosmeticParams: Record<string, string>;
+  executedAt: string;
+  runId: string;
+  toolCallId: string;
+  result: unknown;
+};
+
+export type ToolCallLedger = {
+  entries: LedgerEntry[];
+  retentionMs: number;
+};
+
+export type IdempotencyCheckResult =
+  | { status: 'allowed'; prunedLedger: ToolCallLedger }
+  | {
+      status: 'duplicate';
+      idempotencyKey: string;
+      originalEntry: LedgerEntry;
+      prunedLedger: ToolCallLedger;
+    };
 
 // ── Settings ──
 
