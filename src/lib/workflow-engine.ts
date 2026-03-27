@@ -12,8 +12,17 @@ import type {
   TraceEntry,
   ToolCallTrace,
   MismatchAlert,
+  StructuredAuditEntry,
+  AuditOutcome,
 } from './types';
 import { executeTool } from './tools';
+import {
+  generatePrefixedId,
+  hashPromptConfig,
+  hashToolDef,
+  redactArgs,
+  resolveSubject,
+} from './audit';
 
 type WorkflowInput = {
   userMessage: string;
@@ -30,6 +39,7 @@ type WorkflowResult = {
   route: RouteDecision | null;
   trace: RunTrace;
   updatedState: DemoState;
+  auditEntries: StructuredAuditEntry[];
   approvalRequest?: {
     toolCallId: string;
     toolName: string;
@@ -353,7 +363,7 @@ export async function runWorkflow(
     pendingApproval,
   } = input;
 
-  const traceId = crypto.randomUUID();
+  const requestId = generatePrefixedId('req');
   const startedAt = new Date().toISOString();
   const traceEntries: TraceEntry[] = [];
   const toolCallTraces: ToolCallTrace[] = [];
@@ -361,6 +371,8 @@ export async function runWorkflow(
   let route: RouteDecision | null = null;
   let finalAnswer = '';
   let approvalRequest: WorkflowResult['approvalRequest'] = null;
+  const auditEntries: StructuredAuditEntry[] = [];
+  const promptVersion = hashPromptConfig(promptConfig);
 
   const model = createModel(settings);
 
@@ -502,7 +514,7 @@ export async function runWorkflow(
         inputSchema: def.inputSchema,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         execute: async (args: any) => {
-          const toolCallId = crypto.randomUUID();
+          const toolCallId = generatePrefixedId('tc');
           const timestamp = new Date().toISOString();
 
           addTraceEntry(
@@ -532,6 +544,29 @@ export async function runWorkflow(
                   approved: false,
                 });
 
+                // Create audit entry for denied action
+                const deniedAuditEntry: StructuredAuditEntry = {
+                  id: generatePrefixedId('ae'),
+                  requestId,
+                  toolCallId,
+                  idempotencyKey: null,
+                  actor: { type: 'agent', agentId: route! },
+                  subject: resolveSubject(name, args, currentState),
+                  toolName: name,
+                  toolDefinitionVersion: hashToolDef(toolCatalog, name),
+                  arguments: redactArgs(name, args),
+                  approvalId: toolCallId,
+                  approvalOutcome: 'denied',
+                  outcome: 'denied',
+                  outcomeDetail: null,
+                  requestedAt: timestamp,
+                  completedAt: new Date().toISOString(),
+                  modelId: settings.modelId,
+                  modelProvider: settings.provider,
+                  promptVersion,
+                };
+                auditEntries.push(deniedAuditEntry);
+
                 const trace: ToolCallTrace = {
                   id: toolCallId,
                   toolName: name,
@@ -540,6 +575,7 @@ export async function runWorkflow(
                   timestamp,
                   approvalRequired: true,
                   approvalStatus: 'denied',
+                  auditEntryId: deniedAuditEntry.id,
                 };
                 toolCallTraces.push(trace);
 
@@ -558,6 +594,29 @@ export async function runWorkflow(
                 arguments: args,
               });
 
+              // Create audit entry for pending approval
+              const pendingAuditEntry: StructuredAuditEntry = {
+                id: generatePrefixedId('ae'),
+                requestId,
+                toolCallId,
+                idempotencyKey: null,
+                actor: { type: 'agent', agentId: route! },
+                subject: resolveSubject(name, args, currentState),
+                toolName: name,
+                toolDefinitionVersion: hashToolDef(toolCatalog, name),
+                arguments: redactArgs(name, args),
+                approvalId: toolCallId,
+                approvalOutcome: null,
+                outcome: 'requested',
+                outcomeDetail: null,
+                requestedAt: timestamp,
+                completedAt: null,
+                modelId: settings.modelId,
+                modelProvider: settings.provider,
+                promptVersion,
+              };
+              auditEntries.push(pendingAuditEntry);
+
               const trace: ToolCallTrace = {
                 id: toolCallId,
                 toolName: name,
@@ -566,6 +625,7 @@ export async function runWorkflow(
                 timestamp,
                 approvalRequired: true,
                 approvalStatus: 'pending',
+                auditEntryId: pendingAuditEntry.id,
               };
               toolCallTraces.push(trace);
 
@@ -578,7 +638,9 @@ export async function runWorkflow(
           }
 
           // Execute the tool
+          const executedAt = new Date().toISOString();
           const toolResult = executeTool(name, currentState, args);
+          const completedAt = new Date().toISOString();
           currentState = toolResult.updatedState;
 
           addTraceEntry(
@@ -600,6 +662,37 @@ export async function runWorkflow(
             });
           }
 
+          // Create audit entry for tool calls with side effects
+          let auditEntryId: string | null = null;
+          if (toolResult.sideEffects.length > 0) {
+            const resultObj = toolResult.result as Record<string, unknown> | undefined;
+            const outcome: AuditOutcome =
+              resultObj && resultObj.success === false ? 'failed' : 'completed';
+
+            const auditEntry: StructuredAuditEntry = {
+              id: generatePrefixedId('ae'),
+              requestId,
+              toolCallId,
+              idempotencyKey: null,
+              actor: { type: 'agent', agentId: route! },
+              subject: resolveSubject(name, args, currentState),
+              toolName: name,
+              toolDefinitionVersion: hashToolDef(toolCatalog, name),
+              arguments: redactArgs(name, args),
+              approvalId: meta.requiresApproval ? toolCallId : null,
+              approvalOutcome: meta.requiresApproval ? 'approved' : null,
+              outcome,
+              outcomeDetail: null,
+              requestedAt: executedAt,
+              completedAt,
+              modelId: settings.modelId,
+              modelProvider: settings.provider,
+              promptVersion,
+            };
+            auditEntries.push(auditEntry);
+            auditEntryId = auditEntry.id;
+          }
+
           const traceRecord: ToolCallTrace = {
             id: toolCallId,
             toolName: name,
@@ -610,6 +703,7 @@ export async function runWorkflow(
             approvalStatus: meta.requiresApproval
               ? 'approved'
               : 'not_required',
+            auditEntryId,
           };
           toolCallTraces.push(traceRecord);
 
@@ -670,6 +764,7 @@ export async function runWorkflow(
               timestamp: new Date().toISOString(),
               approvalRequired: false,
               approvalStatus: 'not_required',
+              auditEntryId: null,
             });
           }
         }
@@ -725,7 +820,8 @@ export async function runWorkflow(
   const stateChanges = computeStateChanges(demoState, currentState);
 
   const trace: RunTrace = {
-    id: traceId,
+    id: requestId,
+    requestId,
     startedAt,
     completedAt: new Date().toISOString(),
     userMessage,
@@ -735,6 +831,7 @@ export async function runWorkflow(
     mismatches,
     finalAnswer,
     stateChanges,
+    auditEntryIds: auditEntries.map((ae) => ae.id),
   };
 
   return {
@@ -742,6 +839,7 @@ export async function runWorkflow(
     route,
     trace,
     updatedState: currentState,
+    auditEntries,
     approvalRequest,
   };
 }
