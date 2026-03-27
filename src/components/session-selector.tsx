@@ -59,7 +59,8 @@ export function SessionSelector() {
   const isDisabled = state.isLoading;
 
   const handleLogin = useCallback(
-    (value: string) => {
+    (value: string | null) => {
+      if (!value) return;
       const option = SESSION_OPTIONS.find((o) => o.value === value);
       if (!option) return;
       setSession({

@@ -201,9 +201,10 @@ function loadFromLocalStorage(): Partial<AppState> | null {
 function saveToLocalStorage(state: AppState) {
   if (typeof window === 'undefined') return;
   try {
+    const { structuredAuditLog: _audit, ...demoStateWithoutAudit } = state.demoState;
     const toSave = {
       settings: state.settings,
-      demoState: state.demoState,
+      demoState: demoStateWithoutAudit,
       promptConfig: state.promptConfig,
       toolCatalog: state.toolCatalog,
       traces: state.traces.slice(0, 50),
@@ -269,7 +270,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (saved.settings) dispatch({ type: 'UPDATE_SETTINGS', payload: saved.settings });
       if (saved.demoState) dispatch({ type: 'UPDATE_DEMO_STATE', payload: {
         ...saved.demoState,
-        structuredAuditLog: (saved.demoState as DemoState).structuredAuditLog ?? [],
+        structuredAuditLog: [],
       } });
       if (saved.promptConfig) dispatch({ type: 'UPDATE_PROMPT_CONFIG', payload: saved.promptConfig });
       if (saved.toolCatalog) dispatch({ type: 'UPDATE_TOOL_CATALOG', payload: saved.toolCatalog });
