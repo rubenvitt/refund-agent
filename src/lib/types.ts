@@ -230,7 +230,11 @@ export type EvalCategory =
   | 'negative_refund'
   | 'lookup'
   | 'ambiguity'
-  | 'policy_boundary';
+  | 'policy_boundary'
+  | 'auth_bola'
+  | 'auth_bfla'
+  | 'idempotency'
+  | 'policy_gate';
 
 export type EvalCase = {
   id: string;
@@ -246,7 +250,30 @@ export type EvalCase = {
     approvalExpected: boolean;
     destructiveSideEffectAllowed: boolean;
     expectedMismatch: boolean;
+
+    // Auth
+    authContext?: { actorId: string; actorRole: 'customer' | 'admin' };
+    expectedBolaOutcome?: 'allowed' | 'blocked';
+    expectedBflaOutcome?: 'allowed' | 'blocked';
+
+    // Policy Gate
+    expectedPolicyGateDecision?: 'allow' | 'deny';
+    expectedPolicyGateReason?: 'not_delivered' | 'already_refunded' | 'not_refundable' | 'deadline_passed';
+
+    // Idempotency
+    duplicateCallExpected?: boolean;
+    idempotentToolName?: string;
+
+    // Audit
+    expectedAuditActions?: string[];
+    requestIdConsistencyRequired?: boolean;
   };
+  stateOverrides?: Partial<{
+    orders: Partial<Order>[];
+    customers: Partial<Customer>[];
+    preSeedRefundEvents: RefundEvent[];
+    preSeedAuditEntries: AuditLogEntry[];
+  }>;
 };
 
 export type EvalScores = {
@@ -259,13 +286,22 @@ export type EvalScores = {
   approvalCorrect: boolean;
   sideEffectCorrect: boolean;
   mismatchDetected: boolean;
+  auditEntryPresent: boolean;
+  requestIdConsistent: boolean;
+  policyGateCorrect: boolean;
+  idempotencyRespected: boolean;
+  bolaEnforced: boolean;
+  bflaEnforced: boolean;
 };
 
 export type LlmGraderRubricId =
   | 'clarification_quality'
   | 'policy_accuracy'
   | 'denial_clarity'
-  | 'response_helpfulness';
+  | 'response_helpfulness'
+  | 'auth_denial_communication'
+  | 'idempotency_transparency'
+  | 'policy_gate_communication';
 
 export type LlmGraderResult = {
   rubricId: LlmGraderRubricId;

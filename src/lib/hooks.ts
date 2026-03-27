@@ -235,6 +235,12 @@ export function useEvalRunner() {
                 approvalCorrect: false,
                 sideEffectCorrect: false,
                 mismatchDetected: false,
+                auditEntryPresent: true,
+                requestIdConsistent: true,
+                policyGateCorrect: true,
+                idempotencyRespected: true,
+                bolaEnforced: true,
+                bflaEnforced: true,
               },
               mismatchReason: `Error: ${error instanceof Error ? error.message : String(error)}`,
               trace: {
