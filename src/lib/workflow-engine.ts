@@ -23,6 +23,7 @@ import {
   redactArgs,
   resolveSubject,
 } from './audit';
+import { TOOL_SCHEMAS } from './tool-schemas';
 
 type WorkflowInput = {
   userMessage: string;
@@ -140,51 +141,12 @@ function buildToolSchemas(
       isDestructive: td.isDestructive,
     };
 
-    switch (td.name) {
-      case 'lookup_order':
-        toolDefs[td.name] = {
-          description: td.description,
-          inputSchema: z.object({
-            orderId: z.string().describe('The order ID to look up'),
-          }),
-        };
-        break;
-      case 'verify_customer':
-        toolDefs[td.name] = {
-          description: td.description,
-          inputSchema: z.object({
-            customerId: z.string().describe('The customer ID to verify'),
-            email: z.string().describe('The email address to verify against'),
-          }),
-        };
-        break;
-      case 'refund_order':
-        toolDefs[td.name] = {
-          description: td.description,
-          inputSchema: z.object({
-            orderId: z.string().describe('The order ID to refund'),
-            reason: z.string().describe('The reason for the refund'),
-          }),
-        };
-        break;
-      case 'faq_search':
-        toolDefs[td.name] = {
-          description: td.description,
-          inputSchema: z.object({
-            query: z.string().describe('The search query'),
-          }),
-        };
-        break;
-      case 'reset_password':
-        toolDefs[td.name] = {
-          description: td.description,
-          inputSchema: z.object({
-            email: z
-              .string()
-              .describe('The email address of the account to reset'),
-          }),
-        };
-        break;
+    const schema = TOOL_SCHEMAS[td.name];
+    if (schema) {
+      toolDefs[td.name] = {
+        description: td.description,
+        inputSchema: schema,
+      };
     }
   }
 
