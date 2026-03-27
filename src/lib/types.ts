@@ -91,6 +91,36 @@ export type StructuredAuditEntry = {
   promptVersion: string;
 };
 
+export type GateDenyCategory =
+  | 'schema_validation'
+  | 'tool_not_allowed'
+  | 'domain_invariant'
+  | 'rate_limit';
+
+export type GateOutcome =
+  | { decision: 'allow'; toolName: string; toolCallId: string; requestId: string }
+  | {
+      decision: 'deny';
+      toolName: string;
+      toolCallId: string;
+      requestId: string;
+      category: GateDenyCategory;
+      reason: string;
+      technicalDetail?: string;
+    }
+  | { decision: 'require_approval'; toolName: string; toolCallId: string; requestId: string };
+
+export type PolicyGateContext = {
+  requestId: string;
+  toolCallId: string;
+  route: RouteDecision;
+  toolName: string;
+  args: Record<string, unknown>;
+  demoState: DemoState;
+  toolCallCounts: Record<string, number>;
+  toolCatalog: ToolCatalog;
+};
+
 export type ToolDefinition = {
   name: string;
   description: string;
@@ -129,7 +159,7 @@ export type ToolCallTrace = {
   result: unknown;
   timestamp: string;
   approvalRequired: boolean;
-  approvalStatus: 'approved' | 'denied' | 'not_required' | 'pending';
+  approvalStatus: 'approved' | 'denied' | 'not_required' | 'pending' | 'gate_denied';
   auditEntryId: string | null;
 };
 
@@ -152,7 +182,9 @@ export type TraceEntry = {
     | 'approval_response'
     | 'state_change'
     | 'mismatch_alert'
-    | 'agent_response';
+    | 'agent_response'
+    | 'gate_allow'
+    | 'gate_deny';
   agentId?: string;
   data: Record<string, unknown>;
 };
