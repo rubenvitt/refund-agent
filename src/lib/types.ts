@@ -121,6 +121,23 @@ export type PolicyGateContext = {
   toolCatalog: ToolCatalog;
 };
 
+export type UserRole = 'customer' | 'support_admin';
+
+export type UserSession = {
+  customerId: string;
+  customerName: string;
+  role: UserRole;
+  loginTimestamp: string;
+};
+
+export type AuthCheckResult =
+  | { allowed: true }
+  | {
+      allowed: false;
+      reason: string;
+      checkType: 'bfla' | 'bola' | 'no_session';
+    };
+
 export type ToolDefinition = {
   name: string;
   description: string;
@@ -159,7 +176,7 @@ export type ToolCallTrace = {
   result: unknown;
   timestamp: string;
   approvalRequired: boolean;
-  approvalStatus: 'approved' | 'denied' | 'not_required' | 'pending' | 'gate_denied';
+  approvalStatus: 'approved' | 'denied' | 'not_required' | 'pending' | 'gate_denied' | 'auth_denied';
   auditEntryId: string | null;
 };
 
@@ -185,7 +202,8 @@ export type TraceEntry = {
     | 'agent_response'
     | 'gate_allow'
     | 'gate_deny'
-    | 'idempotency_block';
+    | 'idempotency_block'
+    | 'auth_denial';
   agentId?: string;
   data: Record<string, unknown>;
 };
