@@ -1,4 +1,4 @@
-import type { DemoState, RefundEvent, AuditLogEntry } from './types';
+import type { DemoState, RefundEvent } from './types';
 
 type ToolResult = {
   result: unknown;
@@ -191,22 +191,6 @@ export function refundOrder(
 
   clonedState.refundEvents.push(refundEvent);
 
-  const auditEntry: AuditLogEntry = {
-    id: crypto.randomUUID(),
-    timestamp: now,
-    action: 'refund_order',
-    details: {
-      orderId: order.id,
-      customerId: order.customerId,
-      amount: order.total,
-      reason: args.reason,
-      refundEventId: refundEvent.id,
-    },
-    agentId: 'refund-agent',
-  };
-
-  clonedState.auditLog.push(auditEntry);
-
   return {
     result: {
       success: true,
@@ -214,7 +198,7 @@ export function refundOrder(
       refundEvent,
     },
     updatedState: clonedState,
-    sideEffects: ['refund_created', 'order_status_updated', 'audit_log_entry_added'],
+    sideEffects: ['refund_created', 'order_status_updated'],
   };
 }
 
@@ -293,20 +277,6 @@ export function resetPassword(
   }
 
   const clonedState = deepClone(state);
-  const now = new Date().toISOString();
-
-  const auditEntry: AuditLogEntry = {
-    id: crypto.randomUUID(),
-    timestamp: now,
-    action: 'password_reset',
-    details: {
-      customerId: customer.id,
-      email: args.email,
-    },
-    agentId: 'account-agent',
-  };
-
-  clonedState.auditLog.push(auditEntry);
 
   return {
     result: {
@@ -314,7 +284,7 @@ export function resetPassword(
       message: `Password reset email sent to ${args.email}. Please check your inbox.`,
     },
     updatedState: clonedState,
-    sideEffects: ['password_reset_email_sent', 'audit_log_entry_added'],
+    sideEffects: ['password_reset_email_sent'],
   };
 }
 

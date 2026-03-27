@@ -80,13 +80,6 @@ describe('refundOrder', () => {
     expect(updatedOrder?.refundedAt).not.toBeNull();
   });
 
-  it('adds audit log entry', () => {
-    const state = createSeedState();
-    const result = refundOrder(state, { orderId: '4711', reason: 'Test refund' });
-    expect(result.updatedState.auditLog.length).toBe(1);
-    expect(result.updatedState.auditLog[0].action).toBe('refund_order');
-  });
-
   it('does not mutate original state', () => {
     const state = createSeedState();
     const before = JSON.stringify(state);
@@ -130,10 +123,4 @@ describe('resetPassword', () => {
     expect((result.result as { success: boolean }).success).toBe(false);
   });
 
-  it('adds audit log entry', () => {
-    const state = createSeedState();
-    const result = resetPassword(state, { email: 'max@example.com' });
-    expect(result.updatedState.auditLog.length).toBe(1);
-    expect(result.updatedState.auditLog[0].action).toBe('password_reset');
-  });
 });

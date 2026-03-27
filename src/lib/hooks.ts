@@ -9,6 +9,7 @@ import { scoreEvalCase } from './eval-runner';
 import { createSeedState } from './seed-data';
 import { gradeWithLlm } from './llm-grader';
 import { optimizePrompts, type OptimizationResult } from './prompt-optimizer';
+import { createEmptyLedger } from './idempotency';
 
 export function useChat() {
   const { state, dispatch } = useAppState();
@@ -45,6 +46,8 @@ export function useChat() {
           promptConfig: state.promptConfig,
           toolCatalog: state.toolCatalog,
           demoState: state.demoState,
+          toolCallLedger: state.toolCallLedger,
+          session: state.session,
         });
 
         const assistantMsg: ChatMessage = {
@@ -55,6 +58,10 @@ export function useChat() {
         dispatch({ type: 'ADD_CHAT_MESSAGE', payload: assistantMsg });
         dispatch({ type: 'ADD_TRACE', payload: result.trace });
         dispatch({ type: 'UPDATE_DEMO_STATE', payload: result.updatedState });
+        dispatch({ type: 'UPDATE_LEDGER', payload: result.updatedLedger });
+        if (result.auditEntries.length > 0) {
+          dispatch({ type: 'ADD_AUDIT_ENTRIES', payload: result.auditEntries });
+        }
 
         if (result.approvalRequest) {
           dispatch({ type: 'SET_APPROVAL_REQUEST', payload: result.approvalRequest });
@@ -68,7 +75,7 @@ export function useChat() {
         setIsLoading(false);
       }
     },
-    [state.chatMessages, state.settings, state.promptConfig, state.toolCatalog, state.demoState, dispatch],
+    [state.chatMessages, state.settings, state.promptConfig, state.toolCatalog, state.demoState, state.toolCallLedger, state.session, dispatch],
   );
 
   const resetChat = useCallback(() => {
@@ -104,10 +111,12 @@ export function useApproval() {
           promptConfig: state.promptConfig,
           toolCatalog: state.toolCatalog,
           demoState: state.demoState,
+          toolCallLedger: state.toolCallLedger,
           pendingApproval: {
             toolCallId: state.approvalRequest.toolCallId,
             approved,
           },
+          session: state.session,
         });
 
         const assistantMsg: ChatMessage = {
@@ -118,6 +127,10 @@ export function useApproval() {
         dispatch({ type: 'ADD_CHAT_MESSAGE', payload: assistantMsg });
         dispatch({ type: 'ADD_TRACE', payload: result.trace });
         dispatch({ type: 'UPDATE_DEMO_STATE', payload: result.updatedState });
+        dispatch({ type: 'UPDATE_LEDGER', payload: result.updatedLedger });
+        if (result.auditEntries.length > 0) {
+          dispatch({ type: 'ADD_AUDIT_ENTRIES', payload: result.auditEntries });
+        }
         dispatch({ type: 'SET_APPROVAL_REQUEST', payload: result.approvalRequest ?? null });
       } catch (err) {
         dispatch({
@@ -128,7 +141,7 @@ export function useApproval() {
         setIsLoading(false);
       }
     },
-    [state.approvalRequest, state.chatMessages, state.settings, state.promptConfig, state.toolCatalog, state.demoState, dispatch],
+    [state.approvalRequest, state.chatMessages, state.settings, state.promptConfig, state.toolCatalog, state.demoState, state.toolCallLedger, state.session, dispatch],
   );
 
   return {
@@ -175,9 +188,11 @@ export function useEvalRunner() {
               promptConfig: state.promptConfig,
               toolCatalog: state.toolCatalog,
               demoState: originalState,
+              toolCallLedger: createEmptyLedger(),
               pendingApproval: evalCase.expectations.destructiveSideEffectAllowed
                 ? { toolCallId: 'auto-approve', approved: true }
                 : null,
+              session: null,
             });
 
             const scored = scoreEvalCase(
@@ -220,10 +235,17 @@ export function useEvalRunner() {
                 approvalCorrect: false,
                 sideEffectCorrect: false,
                 mismatchDetected: false,
+                auditEntryPresent: true,
+                requestIdConsistent: true,
+                policyGateCorrect: true,
+                idempotencyRespected: true,
+                bolaEnforced: true,
+                bflaEnforced: true,
               },
               mismatchReason: `Error: ${error instanceof Error ? error.message : String(error)}`,
               trace: {
                 id: crypto.randomUUID(),
+                requestId: crypto.randomUUID(),
                 startedAt: new Date(start).toISOString(),
                 completedAt: new Date().toISOString(),
                 userMessage: evalCase.userMessage,
@@ -233,6 +255,7 @@ export function useEvalRunner() {
                 mismatches: [],
                 finalAnswer: null,
                 stateChanges: [],
+                auditEntryIds: [],
               },
               durationMs: Date.now() - start,
               error: error instanceof Error ? error.message : String(error),

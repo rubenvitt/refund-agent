@@ -1,4 +1,4 @@
-import type { DemoState, Customer, Order } from './types';
+import type { DemoState, Customer, Order, StructuredAuditEntry } from './types';
 
 const customers: Customer[] = [
   { id: 'C001', name: 'Max Mustermann', email: 'max@example.com', verified: true },
@@ -138,5 +138,6 @@ export function createSeedState(): DemoState {
     orders: structuredClone(orders),
     refundEvents: [],
     auditLog: [],
+    structuredAuditLog: [],
   };
 }

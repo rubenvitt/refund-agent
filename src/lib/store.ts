@@ -10,8 +10,12 @@ import type {
   EvalResult,
   HumanReview,
   ApprovalRequest,
+  StructuredAuditEntry,
+  ToolCallLedger,
+  UserSession,
 } from './types';
 import { createSeedState } from './seed-data';
+import { createEmptyLedger } from './idempotency';
 import { defaultPromptConfig, defaultToolCatalog } from './default-prompts';
 
 // ── Chat Message ──
@@ -36,6 +40,8 @@ export type AppState = {
   error: string | null;
   approvalRequest: ApprovalRequest | null;
   chatMessages: ChatMessage[];
+  toolCallLedger: ToolCallLedger;
+  session: UserSession | null;
 };
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -58,6 +64,8 @@ function getInitialState(): AppState {
     error: null,
     approvalRequest: null,
     chatMessages: [],
+    toolCallLedger: createEmptyLedger(),
+    session: null,
   };
 }
 
@@ -81,7 +89,12 @@ export type AppAction =
   | { type: 'RESET_DEMO_STATE' }
   | { type: 'RESET_PROMPT_CONFIG' }
   | { type: 'RESET_TOOL_CATALOG' }
-  | { type: 'RESET_ALL' };
+  | { type: 'RESET_ALL' }
+  | { type: 'ADD_AUDIT_ENTRIES'; payload: StructuredAuditEntry[] }
+  | { type: 'CLEAR_AUDIT_LOG' }
+  | { type: 'UPDATE_LEDGER'; payload: ToolCallLedger }
+  | { type: 'CLEAR_LEDGER' }
+  | { type: 'SET_SESSION'; payload: UserSession | null };
 
 function reducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
@@ -121,13 +134,38 @@ function reducer(state: AppState, action: AppAction): AppState {
     case 'SET_CHAT_MESSAGES':
       return { ...state, chatMessages: action.payload };
     case 'RESET_DEMO_STATE':
-      return { ...state, demoState: createSeedState() };
+      return { ...state, demoState: createSeedState(), toolCallLedger: createEmptyLedger() };
     case 'RESET_PROMPT_CONFIG':
       return { ...state, promptConfig: defaultPromptConfig };
     case 'RESET_TOOL_CATALOG':
       return { ...state, toolCatalog: defaultToolCatalog };
     case 'RESET_ALL':
       return getInitialState();
+    case 'ADD_AUDIT_ENTRIES':
+      return {
+        ...state,
+        demoState: {
+          ...state.demoState,
+          structuredAuditLog: [
+            ...state.demoState.structuredAuditLog,
+            ...action.payload,
+          ],
+        },
+      };
+    case 'CLEAR_AUDIT_LOG':
+      return {
+        ...state,
+        demoState: {
+          ...state.demoState,
+          structuredAuditLog: [],
+        },
+      };
+    case 'UPDATE_LEDGER':
+      return { ...state, toolCallLedger: action.payload };
+    case 'CLEAR_LEDGER':
+      return { ...state, toolCallLedger: createEmptyLedger() };
+    case 'SET_SESSION':
+      return { ...state, session: action.payload };
     default:
       return state;
   }
@@ -145,6 +183,9 @@ const AppContext = createContext<AppContextValue | null>(null);
 // ── localStorage helpers ──
 
 const LS_KEY = 'support-agent-lab';
+const LS_KEY_AUDIT = 'support-agent-lab:audit';
+const LS_KEY_LEDGER = 'support-agent-lab:ledger';
+const MAX_AUDIT_ENTRIES = 200;
 
 function loadFromLocalStorage(): Partial<AppState> | null {
   if (typeof window === 'undefined') return null;
@@ -160,16 +201,59 @@ function loadFromLocalStorage(): Partial<AppState> | null {
 function saveToLocalStorage(state: AppState) {
   if (typeof window === 'undefined') return;
   try {
+    const { structuredAuditLog: _audit, ...demoStateWithoutAudit } = state.demoState;
     const toSave = {
       settings: state.settings,
-      demoState: state.demoState,
+      demoState: demoStateWithoutAudit,
       promptConfig: state.promptConfig,
       toolCatalog: state.toolCatalog,
       traces: state.traces.slice(0, 50),
+      session: state.session,
     };
     localStorage.setItem(LS_KEY, JSON.stringify(toSave));
   } catch {
     // quota exceeded or other error – silently ignore
+  }
+}
+
+function saveAuditLog(entries: StructuredAuditEntry[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    const trimmed = entries.slice(-MAX_AUDIT_ENTRIES);
+    localStorage.setItem(LS_KEY_AUDIT, JSON.stringify(trimmed));
+  } catch {
+    // quota exceeded — silently ignore
+  }
+}
+
+function loadAuditLog(): StructuredAuditEntry[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(LS_KEY_AUDIT);
+    if (!raw) return [];
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+}
+
+function saveLedger(ledger: ToolCallLedger) {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(LS_KEY_LEDGER, JSON.stringify(ledger));
+  } catch {
+    // quota exceeded — silently ignore
+  }
+}
+
+function loadLedger(): ToolCallLedger | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(LS_KEY_LEDGER);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
   }
 }
 
@@ -184,10 +268,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const saved = loadFromLocalStorage();
     if (saved) {
       if (saved.settings) dispatch({ type: 'UPDATE_SETTINGS', payload: saved.settings });
-      if (saved.demoState) dispatch({ type: 'UPDATE_DEMO_STATE', payload: saved.demoState });
+      if (saved.demoState) dispatch({ type: 'UPDATE_DEMO_STATE', payload: {
+        ...saved.demoState,
+        structuredAuditLog: [],
+      } });
       if (saved.promptConfig) dispatch({ type: 'UPDATE_PROMPT_CONFIG', payload: saved.promptConfig });
       if (saved.toolCatalog) dispatch({ type: 'UPDATE_TOOL_CATALOG', payload: saved.toolCatalog });
       if (saved.traces) dispatch({ type: 'SET_TRACES', payload: saved.traces as RunTrace[] });
+      if ((saved as Record<string, unknown>).session) {
+        dispatch({ type: 'SET_SESSION', payload: (saved as Record<string, unknown>).session as UserSession });
+      }
+    }
+    const auditLog = loadAuditLog();
+    if (auditLog.length > 0) {
+      dispatch({ type: 'ADD_AUDIT_ENTRIES', payload: auditLog });
+    }
+    const savedLedger = loadLedger();
+    if (savedLedger) {
+      dispatch({ type: 'UPDATE_LEDGER', payload: savedLedger });
     }
     setHydrated(true);
   }, []);
@@ -197,6 +295,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!hydrated) return;
     saveToLocalStorage(state);
   }, [hydrated, state.settings, state.demoState, state.promptConfig, state.toolCatalog, state.traces]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    saveAuditLog(state.demoState.structuredAuditLog);
+  }, [hydrated, state.demoState.structuredAuditLog]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    saveLedger(state.toolCallLedger);
+  }, [hydrated, state.toolCallLedger]);
 
   return React.createElement(
     AppContext.Provider,
@@ -228,5 +336,14 @@ export function useDemoState() {
     demoState: state.demoState,
     updateDemoState: (s: DemoState) => dispatch({ type: 'UPDATE_DEMO_STATE', payload: s }),
     resetDemoState: () => dispatch({ type: 'RESET_DEMO_STATE' }),
+  };
+}
+
+export function useSession() {
+  const { state, dispatch } = useAppState();
+  return {
+    session: state.session,
+    setSession: (session: UserSession | null) =>
+      dispatch({ type: 'SET_SESSION', payload: session }),
   };
 }

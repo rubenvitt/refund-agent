@@ -23,7 +23,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { useDemoState } from '@/lib/store';
+import { useDemoState, useAppState } from '@/lib/store';
 
 function statusColor(status: string) {
   switch (status) {
@@ -56,8 +56,26 @@ function formatCurrency(n: number) {
   }).format(n);
 }
 
+function outcomeColor(outcome: string) {
+  switch (outcome) {
+    case 'completed':
+    case 'approved':
+      return 'text-green-600 bg-green-100 dark:text-green-400 dark:bg-green-900/30';
+    case 'denied':
+    case 'failed':
+      return 'text-red-600 bg-red-100 dark:text-red-400 dark:bg-red-900/30';
+    case 'requested':
+      return 'text-yellow-600 bg-yellow-100 dark:text-yellow-400 dark:bg-yellow-900/30';
+    case 'skipped':
+      return 'text-gray-600 bg-gray-100 dark:text-gray-400 dark:bg-gray-900/30';
+    default:
+      return 'bg-muted text-muted-foreground';
+  }
+}
+
 export function BackendStateTab() {
   const { demoState, resetDemoState } = useDemoState();
+  const { dispatch } = useAppState();
 
   return (
     <div className="flex flex-col gap-4">
@@ -254,6 +272,88 @@ export function BackendStateTab() {
                         </TableCell>
                       </TableRow>
                     ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Structured Audit Log */}
+          <Card size="sm">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="flex items-center gap-2 text-sm">
+                  <FileText className="size-4" />
+                  Structured Audit Log ({demoState.structuredAuditLog.length})
+                </CardTitle>
+                {demoState.structuredAuditLog.length > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => dispatch({ type: 'CLEAR_AUDIT_LOG' })}
+                  >
+                    <RotateCcw className="size-3.5" />
+                    Clear
+                  </Button>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent>
+              {demoState.structuredAuditLog.length === 0 ? (
+                <p className="py-4 text-center text-xs text-muted-foreground">
+                  No structured audit entries yet.
+                </p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Request ID</TableHead>
+                      <TableHead>Tool</TableHead>
+                      <TableHead>Actor</TableHead>
+                      <TableHead>Subject</TableHead>
+                      <TableHead>Outcome</TableHead>
+                      <TableHead>Time</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {demoState.structuredAuditLog.map((entry) => {
+                      const actorLabel =
+                        entry.actor.type === 'agent'
+                          ? entry.actor.agentId
+                          : entry.actor.type === 'system'
+                          ? entry.actor.component
+                          : 'user';
+                      return (
+                        <TableRow key={entry.id}>
+                          <TableCell>
+                            <code className="font-mono text-[10px]">
+                              {entry.requestId.slice(0, 12)}…
+                            </code>
+                          </TableCell>
+                          <TableCell className="text-xs font-medium">
+                            {entry.toolName}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline" className="text-[10px]">
+                              {actorLabel}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="max-w-[120px] truncate text-xs">
+                            {entry.subject ?? '--'}
+                          </TableCell>
+                          <TableCell>
+                            <span
+                              className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium ${outcomeColor(entry.outcome)}`}
+                            >
+                              {entry.outcome}
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            {entry.requestedAt}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               )}

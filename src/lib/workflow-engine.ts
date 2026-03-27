@@ -12,8 +12,29 @@ import type {
   TraceEntry,
   ToolCallTrace,
   MismatchAlert,
+  StructuredAuditEntry,
+  AuditOutcome,
+  PolicyGateContext,
+  ToolCallLedger,
+  UserSession,
 } from './types';
 import { executeTool } from './tools';
+import {
+  generatePrefixedId,
+  hashPromptConfig,
+  hashToolDef,
+  redactArgs,
+  resolveSubject,
+} from './audit';
+import { TOOL_SCHEMAS } from './tool-schemas';
+import { evaluatePolicyGate, getAllowedToolsForRoute } from './policy-gate';
+import { evaluateAuthForToolCall } from './auth-gate';
+import {
+  generateIdempotencyKey,
+  checkIdempotency,
+  addLedgerEntry,
+  createEmptyLedger,
+} from './idempotency';
 
 type WorkflowInput = {
   userMessage: string;
@@ -22,7 +43,9 @@ type WorkflowInput = {
   promptConfig: PromptConfig;
   toolCatalog: ToolCatalog;
   demoState: DemoState;
+  toolCallLedger: ToolCallLedger;
   pendingApproval?: { toolCallId: string; approved: boolean } | null;
+  session: UserSession | null;
 };
 
 type WorkflowResult = {
@@ -30,6 +53,8 @@ type WorkflowResult = {
   route: RouteDecision | null;
   trace: RunTrace;
   updatedState: DemoState;
+  updatedLedger: ToolCallLedger;
+  auditEntries: StructuredAuditEntry[];
   approvalRequest?: {
     toolCallId: string;
     toolName: string;
@@ -83,21 +108,6 @@ function getAgentInstructions(
   }
 }
 
-function getToolsForRoute(route: RouteDecision): string[] {
-  switch (route) {
-    case 'refund':
-      return ['lookup_order', 'verify_customer', 'refund_order', 'faq_search'];
-    case 'lookup':
-      return ['lookup_order', 'faq_search'];
-    case 'faq':
-      return ['faq_search'];
-    case 'account':
-      return ['verify_customer', 'reset_password', 'faq_search'];
-    case 'clarify':
-      return [];
-  }
-}
-
 /**
  * Build AI SDK tool definitions from the ToolCatalog, filtered to only the
  * tools this agent route is allowed to use.  We do NOT attach `execute`
@@ -130,51 +140,12 @@ function buildToolSchemas(
       isDestructive: td.isDestructive,
     };
 
-    switch (td.name) {
-      case 'lookup_order':
-        toolDefs[td.name] = {
-          description: td.description,
-          inputSchema: z.object({
-            orderId: z.string().describe('The order ID to look up'),
-          }),
-        };
-        break;
-      case 'verify_customer':
-        toolDefs[td.name] = {
-          description: td.description,
-          inputSchema: z.object({
-            customerId: z.string().describe('The customer ID to verify'),
-            email: z.string().describe('The email address to verify against'),
-          }),
-        };
-        break;
-      case 'refund_order':
-        toolDefs[td.name] = {
-          description: td.description,
-          inputSchema: z.object({
-            orderId: z.string().describe('The order ID to refund'),
-            reason: z.string().describe('The reason for the refund'),
-          }),
-        };
-        break;
-      case 'faq_search':
-        toolDefs[td.name] = {
-          description: td.description,
-          inputSchema: z.object({
-            query: z.string().describe('The search query'),
-          }),
-        };
-        break;
-      case 'reset_password':
-        toolDefs[td.name] = {
-          description: td.description,
-          inputSchema: z.object({
-            email: z
-              .string()
-              .describe('The email address of the account to reset'),
-          }),
-        };
-        break;
+    const schema = TOOL_SCHEMAS[td.name];
+    if (schema) {
+      toolDefs[td.name] = {
+        description: td.description,
+        inputSchema: schema,
+      };
     }
   }
 
@@ -350,10 +321,12 @@ export async function runWorkflow(
     promptConfig,
     toolCatalog,
     demoState,
+    toolCallLedger,
     pendingApproval,
+    session,
   } = input;
 
-  const traceId = crypto.randomUUID();
+  const requestId = generatePrefixedId('req');
   const startedAt = new Date().toISOString();
   const traceEntries: TraceEntry[] = [];
   const toolCallTraces: ToolCallTrace[] = [];
@@ -361,6 +334,10 @@ export async function runWorkflow(
   let route: RouteDecision | null = null;
   let finalAnswer = '';
   let approvalRequest: WorkflowResult['approvalRequest'] = null;
+  const auditEntries: StructuredAuditEntry[] = [];
+  let currentLedger = toolCallLedger;
+  const promptVersion = hashPromptConfig(promptConfig);
+  const toolCallCounts: Record<string, number> = {};
 
   const model = createModel(settings);
 
@@ -475,7 +452,7 @@ export async function runWorkflow(
     }
   } else {
     // Determine which tools this agent route may use
-    const allowedToolNames = getToolsForRoute(route);
+    const allowedToolNames = getAllowedToolsForRoute(route);
     const { toolDefs, toolMeta } = buildToolSchemas(
       toolCatalog,
       allowedToolNames
@@ -502,7 +479,7 @@ export async function runWorkflow(
         inputSchema: def.inputSchema,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         execute: async (args: any) => {
-          const toolCallId = crypto.randomUUID();
+          const toolCallId = generatePrefixedId('tc');
           const timestamp = new Date().toISOString();
 
           addTraceEntry(
@@ -516,8 +493,145 @@ export async function runWorkflow(
             route!
           );
 
-          // Check if this tool requires approval
-          if (meta.requiresApproval) {
+          // ── Auth check (BFLA then BOLA) ──
+          const authResult = evaluateAuthForToolCall(name, args, session, currentState);
+          if (!authResult.allowed) {
+            addTraceEntry(
+              traceEntries,
+              'auth_denial',
+              {
+                toolCallId,
+                toolName: name,
+                checkType: authResult.checkType,
+                reason: authResult.reason,
+              },
+              route!
+            );
+
+            // Create audit entry for auth denial
+            const authDeniedAuditEntry: StructuredAuditEntry = {
+              id: generatePrefixedId('ae'),
+              requestId,
+              toolCallId,
+              idempotencyKey: null,
+              actor: { type: 'agent', agentId: route! },
+              subject: resolveSubject(name, args, currentState),
+              toolName: name,
+              toolDefinitionVersion: hashToolDef(toolCatalog, name),
+              arguments: redactArgs(name, args),
+              approvalId: null,
+              approvalOutcome: null,
+              outcome: 'denied',
+              outcomeDetail: `auth_${authResult.checkType}: ${authResult.reason}`,
+              requestedAt: timestamp,
+              completedAt: new Date().toISOString(),
+              modelId: settings.modelId,
+              modelProvider: settings.provider,
+              promptVersion,
+            };
+            auditEntries.push(authDeniedAuditEntry);
+
+            const authDeniedTrace: ToolCallTrace = {
+              id: toolCallId,
+              toolName: name,
+              arguments: args,
+              result: { authorization_denied: true, reason: authResult.reason },
+              timestamp,
+              approvalRequired: false,
+              approvalStatus: 'auth_denied',
+              auditEntryId: authDeniedAuditEntry.id,
+            };
+            toolCallTraces.push(authDeniedTrace);
+
+            return { authorization_denied: true, reason: authResult.reason };
+          }
+
+          // ── Policy Gate ──
+          const gateCtx: PolicyGateContext = {
+            requestId,
+            toolCallId,
+            route: route!,
+            toolName: name,
+            args,
+            demoState: currentState,
+            toolCallCounts,
+            toolCatalog,
+          };
+
+          const gateOutcome = evaluatePolicyGate(gateCtx);
+
+          if (gateOutcome.decision === 'deny') {
+            addTraceEntry(
+              traceEntries,
+              'gate_deny',
+              {
+                toolCallId,
+                toolName: name,
+                category: gateOutcome.category,
+                reason: gateOutcome.reason,
+                technicalDetail: gateOutcome.technicalDetail ?? null,
+              },
+              route!
+            );
+
+            // Create audit entry for gate denial
+            const deniedAuditEntry: StructuredAuditEntry = {
+              id: generatePrefixedId('ae'),
+              requestId,
+              toolCallId,
+              idempotencyKey: null,
+              actor: { type: 'agent', agentId: route! },
+              subject: resolveSubject(name, args, currentState),
+              toolName: name,
+              toolDefinitionVersion: hashToolDef(toolCatalog, name),
+              arguments: redactArgs(name, args),
+              approvalId: null,
+              approvalOutcome: null,
+              outcome: 'skipped',
+              outcomeDetail: `Gate denied: ${gateOutcome.category} — ${gateOutcome.reason}`,
+              requestedAt: timestamp,
+              completedAt: new Date().toISOString(),
+              modelId: settings.modelId,
+              modelProvider: settings.provider,
+              promptVersion,
+            };
+            auditEntries.push(deniedAuditEntry);
+
+            const trace: ToolCallTrace = {
+              id: toolCallId,
+              toolName: name,
+              arguments: args,
+              result: { denied: true, reason: gateOutcome.reason, category: gateOutcome.category },
+              timestamp,
+              approvalRequired: false,
+              approvalStatus: 'gate_denied',
+              auditEntryId: deniedAuditEntry.id,
+            };
+            toolCallTraces.push(trace);
+
+            // Increment call count even for denials (to prevent infinite retry loops)
+            toolCallCounts[name] = (toolCallCounts[name] ?? 0) + 1;
+
+            return { denied: true, reason: gateOutcome.reason, category: gateOutcome.category };
+          }
+
+          // Gate passed — record gate_allow
+          addTraceEntry(
+            traceEntries,
+            'gate_allow',
+            {
+              toolCallId,
+              toolName: name,
+              decision: gateOutcome.decision,
+            },
+            route!
+          );
+
+          // Increment call count for successful gate passes
+          toolCallCounts[name] = (toolCallCounts[name] ?? 0) + 1;
+
+          // ── Approval Check (for require_approval decisions) ──
+          if (gateOutcome.decision === 'require_approval') {
             if (pendingApproval) {
               // We have an approval response from the user
               if (pendingApproval.approved) {
@@ -532,6 +646,29 @@ export async function runWorkflow(
                   approved: false,
                 });
 
+                // Create audit entry for denied action
+                const deniedAuditEntry: StructuredAuditEntry = {
+                  id: generatePrefixedId('ae'),
+                  requestId,
+                  toolCallId,
+                  idempotencyKey: null,
+                  actor: { type: 'agent', agentId: route! },
+                  subject: resolveSubject(name, args, currentState),
+                  toolName: name,
+                  toolDefinitionVersion: hashToolDef(toolCatalog, name),
+                  arguments: redactArgs(name, args),
+                  approvalId: toolCallId,
+                  approvalOutcome: 'denied',
+                  outcome: 'denied',
+                  outcomeDetail: null,
+                  requestedAt: timestamp,
+                  completedAt: new Date().toISOString(),
+                  modelId: settings.modelId,
+                  modelProvider: settings.provider,
+                  promptVersion,
+                };
+                auditEntries.push(deniedAuditEntry);
+
                 const trace: ToolCallTrace = {
                   id: toolCallId,
                   toolName: name,
@@ -540,6 +677,7 @@ export async function runWorkflow(
                   timestamp,
                   approvalRequired: true,
                   approvalStatus: 'denied',
+                  auditEntryId: deniedAuditEntry.id,
                 };
                 toolCallTraces.push(trace);
 
@@ -558,6 +696,29 @@ export async function runWorkflow(
                 arguments: args,
               });
 
+              // Create audit entry for pending approval
+              const pendingAuditEntry: StructuredAuditEntry = {
+                id: generatePrefixedId('ae'),
+                requestId,
+                toolCallId,
+                idempotencyKey: null,
+                actor: { type: 'agent', agentId: route! },
+                subject: resolveSubject(name, args, currentState),
+                toolName: name,
+                toolDefinitionVersion: hashToolDef(toolCatalog, name),
+                arguments: redactArgs(name, args),
+                approvalId: toolCallId,
+                approvalOutcome: null,
+                outcome: 'requested',
+                outcomeDetail: null,
+                requestedAt: timestamp,
+                completedAt: null,
+                modelId: settings.modelId,
+                modelProvider: settings.provider,
+                promptVersion,
+              };
+              auditEntries.push(pendingAuditEntry);
+
               const trace: ToolCallTrace = {
                 id: toolCallId,
                 toolName: name,
@@ -566,6 +727,7 @@ export async function runWorkflow(
                 timestamp,
                 approvalRequired: true,
                 approvalStatus: 'pending',
+                auditEntryId: pendingAuditEntry.id,
               };
               toolCallTraces.push(trace);
 
@@ -577,8 +739,48 @@ export async function runWorkflow(
             }
           }
 
-          // Execute the tool
+          // ── Idempotency check ──
+          const idempotencyKey = generateIdempotencyKey(name, args);
+
+          if (idempotencyKey !== null) {
+            const idempotencyResult = checkIdempotency(idempotencyKey, currentLedger);
+            currentLedger = idempotencyResult.prunedLedger;
+
+            if (idempotencyResult.status === 'duplicate') {
+              addTraceEntry(
+                traceEntries,
+                'idempotency_block',
+                {
+                  toolCallId,
+                  toolName: name,
+                  idempotencyKey,
+                  originalRunId: idempotencyResult.originalEntry.runId,
+                  originalToolCallId: idempotencyResult.originalEntry.toolCallId,
+                  replayedResult: idempotencyResult.originalEntry.result,
+                },
+                route!
+              );
+
+              const trace: ToolCallTrace = {
+                id: toolCallId,
+                toolName: name,
+                arguments: args,
+                result: idempotencyResult.originalEntry.result,
+                timestamp,
+                approvalRequired: meta.requiresApproval,
+                approvalStatus: meta.requiresApproval ? 'approved' : 'not_required',
+                auditEntryId: null,
+              };
+              toolCallTraces.push(trace);
+
+              return idempotencyResult.originalEntry.result;
+            }
+          }
+
+          // ── Execute the tool (decision === 'allow') ──
+          const executedAt = new Date().toISOString();
           const toolResult = executeTool(name, currentState, args);
+          const completedAt = new Date().toISOString();
           currentState = toolResult.updatedState;
 
           addTraceEntry(
@@ -600,6 +802,53 @@ export async function runWorkflow(
             });
           }
 
+          // Create audit entry for tool calls with side effects
+          let auditEntryId: string | null = null;
+          if (toolResult.sideEffects.length > 0) {
+            const resultObj = toolResult.result as Record<string, unknown> | undefined;
+            const outcome: AuditOutcome =
+              resultObj && resultObj.success === false ? 'failed' : 'completed';
+
+            const auditEntry: StructuredAuditEntry = {
+              id: generatePrefixedId('ae'),
+              requestId,
+              toolCallId,
+              idempotencyKey: null,
+              actor: { type: 'agent', agentId: route! },
+              subject: resolveSubject(name, args, currentState),
+              toolName: name,
+              toolDefinitionVersion: hashToolDef(toolCatalog, name),
+              arguments: redactArgs(name, args),
+              approvalId: meta.requiresApproval ? toolCallId : null,
+              approvalOutcome: meta.requiresApproval ? 'approved' : null,
+              outcome,
+              outcomeDetail: null,
+              requestedAt: executedAt,
+              completedAt,
+              modelId: settings.modelId,
+              modelProvider: settings.provider,
+              promptVersion,
+            };
+            auditEntries.push(auditEntry);
+            auditEntryId = auditEntry.id;
+
+            // Update ledger for idempotency tracking
+            if (idempotencyKey !== null) {
+              currentLedger = addLedgerEntry(
+                currentLedger,
+                name,
+                args,
+                idempotencyKey,
+                requestId,
+                toolCallId,
+                toolResult.result
+              );
+
+              // Patch the audit entry's idempotencyKey
+              auditEntry.idempotencyKey = idempotencyKey;
+            }
+          }
+
           const traceRecord: ToolCallTrace = {
             id: toolCallId,
             toolName: name,
@@ -610,6 +859,7 @@ export async function runWorkflow(
             approvalStatus: meta.requiresApproval
               ? 'approved'
               : 'not_required',
+            auditEntryId,
           };
           toolCallTraces.push(traceRecord);
 
@@ -670,6 +920,7 @@ export async function runWorkflow(
               timestamp: new Date().toISOString(),
               approvalRequired: false,
               approvalStatus: 'not_required',
+              auditEntryId: null,
             });
           }
         }
@@ -725,7 +976,8 @@ export async function runWorkflow(
   const stateChanges = computeStateChanges(demoState, currentState);
 
   const trace: RunTrace = {
-    id: traceId,
+    id: requestId,
+    requestId,
     startedAt,
     completedAt: new Date().toISOString(),
     userMessage,
@@ -735,6 +987,7 @@ export async function runWorkflow(
     mismatches,
     finalAnswer,
     stateChanges,
+    auditEntryIds: auditEntries.map((ae) => ae.id),
   };
 
   return {
@@ -742,6 +995,8 @@ export async function runWorkflow(
     route,
     trace,
     updatedState: currentState,
+    updatedLedger: currentLedger,
+    auditEntries,
     approvalRequest,
   };
 }

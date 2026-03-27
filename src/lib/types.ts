@@ -53,6 +53,91 @@ export type AuditLogEntry = {
   agentId: string;
 };
 
+export type AuditActor =
+  | { type: 'user' }
+  | { type: 'agent'; agentId: string }
+  | { type: 'system'; component: string };
+
+export type AuditOutcome =
+  | 'requested'
+  | 'approved'
+  | 'denied'
+  | 'completed'
+  | 'failed'
+  | 'skipped';
+
+export type AuditToolArguments =
+  | { redacted: true; reason: string }
+  | Record<string, unknown>;
+
+export type StructuredAuditEntry = {
+  id: string;
+  requestId: string;
+  toolCallId: string;
+  idempotencyKey: string | null;
+  actor: AuditActor;
+  subject: string | null;
+  toolName: string;
+  toolDefinitionVersion: string;
+  arguments: AuditToolArguments;
+  approvalId: string | null;
+  approvalOutcome: 'approved' | 'denied' | null;
+  outcome: AuditOutcome;
+  outcomeDetail: string | null;
+  requestedAt: string;
+  completedAt: string | null;
+  modelId: string;
+  modelProvider: string;
+  promptVersion: string;
+};
+
+export type GateDenyCategory =
+  | 'schema_validation'
+  | 'tool_not_allowed'
+  | 'domain_invariant'
+  | 'rate_limit';
+
+export type GateOutcome =
+  | { decision: 'allow'; toolName: string; toolCallId: string; requestId: string }
+  | {
+      decision: 'deny';
+      toolName: string;
+      toolCallId: string;
+      requestId: string;
+      category: GateDenyCategory;
+      reason: string;
+      technicalDetail?: string;
+    }
+  | { decision: 'require_approval'; toolName: string; toolCallId: string; requestId: string };
+
+export type PolicyGateContext = {
+  requestId: string;
+  toolCallId: string;
+  route: RouteDecision;
+  toolName: string;
+  args: Record<string, unknown>;
+  demoState: DemoState;
+  toolCallCounts: Record<string, number>;
+  toolCatalog: ToolCatalog;
+};
+
+export type UserRole = 'customer' | 'support_admin';
+
+export type UserSession = {
+  customerId: string;
+  customerName: string;
+  role: UserRole;
+  loginTimestamp: string;
+};
+
+export type AuthCheckResult =
+  | { allowed: true }
+  | {
+      allowed: false;
+      reason: string;
+      checkType: 'bfla' | 'bola' | 'no_session';
+    };
+
 export type ToolDefinition = {
   name: string;
   description: string;
@@ -77,6 +162,7 @@ export type DemoState = {
   orders: Order[];
   refundEvents: RefundEvent[];
   auditLog: AuditLogEntry[];
+  structuredAuditLog: StructuredAuditEntry[];
 };
 
 // ── Trace ──
@@ -90,7 +176,8 @@ export type ToolCallTrace = {
   result: unknown;
   timestamp: string;
   approvalRequired: boolean;
-  approvalStatus: 'approved' | 'denied' | 'not_required' | 'pending';
+  approvalStatus: 'approved' | 'denied' | 'not_required' | 'pending' | 'gate_denied' | 'auth_denied';
+  auditEntryId: string | null;
 };
 
 export type MismatchAlert = {
@@ -112,13 +199,18 @@ export type TraceEntry = {
     | 'approval_response'
     | 'state_change'
     | 'mismatch_alert'
-    | 'agent_response';
+    | 'agent_response'
+    | 'gate_allow'
+    | 'gate_deny'
+    | 'idempotency_block'
+    | 'auth_denial';
   agentId?: string;
   data: Record<string, unknown>;
 };
 
 export type RunTrace = {
   id: string;
+  requestId: string;
   startedAt: string;
   completedAt: string | null;
   userMessage: string;
@@ -128,6 +220,7 @@ export type RunTrace = {
   mismatches: MismatchAlert[];
   finalAnswer: string | null;
   stateChanges: Array<{ field: string; before: unknown; after: unknown }>;
+  auditEntryIds: string[];
 };
 
 // ── Evals ──
@@ -137,7 +230,11 @@ export type EvalCategory =
   | 'negative_refund'
   | 'lookup'
   | 'ambiguity'
-  | 'policy_boundary';
+  | 'policy_boundary'
+  | 'auth_bola'
+  | 'auth_bfla'
+  | 'idempotency'
+  | 'policy_gate';
 
 export type EvalCase = {
   id: string;
@@ -153,7 +250,30 @@ export type EvalCase = {
     approvalExpected: boolean;
     destructiveSideEffectAllowed: boolean;
     expectedMismatch: boolean;
+
+    // Auth
+    authContext?: { actorId: string; actorRole: 'customer' | 'admin' };
+    expectedBolaOutcome?: 'allowed' | 'blocked';
+    expectedBflaOutcome?: 'allowed' | 'blocked';
+
+    // Policy Gate
+    expectedPolicyGateDecision?: 'allow' | 'deny';
+    expectedPolicyGateReason?: 'not_delivered' | 'already_refunded' | 'not_refundable' | 'deadline_passed';
+
+    // Idempotency
+    duplicateCallExpected?: boolean;
+    idempotentToolName?: string;
+
+    // Audit
+    expectedAuditActions?: string[];
+    requestIdConsistencyRequired?: boolean;
   };
+  stateOverrides?: Partial<{
+    orders: Partial<Order>[];
+    customers: Partial<Customer>[];
+    preSeedRefundEvents: RefundEvent[];
+    preSeedAuditEntries: AuditLogEntry[];
+  }>;
 };
 
 export type EvalScores = {
@@ -166,13 +286,22 @@ export type EvalScores = {
   approvalCorrect: boolean;
   sideEffectCorrect: boolean;
   mismatchDetected: boolean;
+  auditEntryPresent: boolean;
+  requestIdConsistent: boolean;
+  policyGateCorrect: boolean;
+  idempotencyRespected: boolean;
+  bolaEnforced: boolean;
+  bflaEnforced: boolean;
 };
 
 export type LlmGraderRubricId =
   | 'clarification_quality'
   | 'policy_accuracy'
   | 'denial_clarity'
-  | 'response_helpfulness';
+  | 'response_helpfulness'
+  | 'auth_denial_communication'
+  | 'idempotency_transparency'
+  | 'policy_gate_communication';
 
 export type LlmGraderResult = {
   rubricId: LlmGraderRubricId;
@@ -213,6 +342,33 @@ export type EvalResult = {
   durationMs: number;
   error?: string;
 };
+
+// ── Idempotency ──
+
+export type LedgerEntry = {
+  idempotencyKey: string;
+  toolName: string;
+  semanticParams: Record<string, string>;
+  cosmeticParams: Record<string, string>;
+  executedAt: string;
+  runId: string;
+  toolCallId: string;
+  result: unknown;
+};
+
+export type ToolCallLedger = {
+  entries: LedgerEntry[];
+  retentionMs: number;
+};
+
+export type IdempotencyCheckResult =
+  | { status: 'allowed'; prunedLedger: ToolCallLedger }
+  | {
+      status: 'duplicate';
+      idempotencyKey: string;
+      originalEntry: LedgerEntry;
+      prunedLedger: ToolCallLedger;
+    };
 
 // ── Settings ──
 

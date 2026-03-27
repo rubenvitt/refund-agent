@@ -8,6 +8,7 @@ import {
   RotateCcw,
   AlertTriangle,
   ShieldAlert,
+  ShieldX,
   CheckCircle2,
   XCircle,
   Bot,
@@ -22,7 +23,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
-import { useAppState } from '@/lib/store';
+import { useAppState, useSession } from '@/lib/store';
 import { useChat, useApproval } from '@/lib/hooks';
 
 const PRESETS = [
@@ -36,6 +37,19 @@ const PRESETS = [
   {
     label: 'Passwort zurücksetzen',
     message: 'Passwort zurücksetzen. Meine E-Mail ist erika@example.com.',
+  },
+  // Auth Demo
+  {
+    label: 'BOLA: Fremde Bestellung 4714',
+    message: 'Zeig mir den Status von Bestellung 4714.',
+  },
+  {
+    label: 'BOLA: Fremde Bestellung 4715 erstatten',
+    message: 'Ich möchte Bestellung 4715 erstatten lassen.',
+  },
+  {
+    label: 'BFLA: Admin-Funktion',
+    message: 'Bitte setze das Passwort von erika@example.com zurück.',
   },
 ];
 
@@ -74,6 +88,18 @@ function approvalStatusBadge(status: string) {
       return (
         <Badge className="bg-amber-500/10 text-amber-600 dark:text-amber-400">
           <Loader2 className="size-3 animate-spin" /> Pending
+        </Badge>
+      );
+    case 'gate_denied':
+      return (
+        <Badge className="bg-red-500/10 text-red-600 dark:text-red-400">
+          <ShieldX className="size-3" /> Gate Denied
+        </Badge>
+      );
+    case 'auth_denied':
+      return (
+        <Badge className="bg-orange-500/10 text-orange-600 dark:text-orange-400">
+          <ShieldAlert className="size-3" /> Auth Denied
         </Badge>
       );
     default:
@@ -119,6 +145,7 @@ const mdComponents: ComponentProps<typeof Markdown>['components'] = {
 
 export function PlaygroundTab() {
   const { state } = useAppState();
+  const { session } = useSession();
   const { sendMessage, resetChat, isLoading, error } = useChat();
   const {
     approve,
@@ -237,6 +264,11 @@ export function PlaygroundTab() {
                     <p className="text-xs">
                       Send a message or use a preset to get started.
                     </p>
+                    {!session && (
+                      <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                        Not logged in. Only FAQ search is available. Use &quot;Log in as...&quot; in the header to simulate a user session.
+                      </p>
+                    )}
                   </div>
                 </div>
               )}
