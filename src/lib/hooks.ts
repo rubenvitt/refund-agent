@@ -54,10 +54,10 @@ export function useChat() {
         };
         dispatch({ type: 'ADD_CHAT_MESSAGE', payload: assistantMsg });
         dispatch({ type: 'ADD_TRACE', payload: result.trace });
+        dispatch({ type: 'UPDATE_DEMO_STATE', payload: result.updatedState });
         if (result.auditEntries.length > 0) {
           dispatch({ type: 'ADD_AUDIT_ENTRIES', payload: result.auditEntries });
         }
-        dispatch({ type: 'UPDATE_DEMO_STATE', payload: result.updatedState });
 
         if (result.approvalRequest) {
           dispatch({ type: 'SET_APPROVAL_REQUEST', payload: result.approvalRequest });
@@ -120,10 +120,10 @@ export function useApproval() {
         };
         dispatch({ type: 'ADD_CHAT_MESSAGE', payload: assistantMsg });
         dispatch({ type: 'ADD_TRACE', payload: result.trace });
+        dispatch({ type: 'UPDATE_DEMO_STATE', payload: result.updatedState });
         if (result.auditEntries.length > 0) {
           dispatch({ type: 'ADD_AUDIT_ENTRIES', payload: result.auditEntries });
         }
-        dispatch({ type: 'UPDATE_DEMO_STATE', payload: result.updatedState });
         dispatch({ type: 'SET_APPROVAL_REQUEST', payload: result.approvalRequest ?? null });
       } catch (err) {
         dispatch({
