@@ -250,6 +250,19 @@ function TraceCard({ trace }: { trace: RunTrace }) {
                         {JSON.stringify(entry.data, null, 2)}
                       </pre>
                     )}
+                    {entry.type === 'tool_call' && (() => {
+                      const tc = trace.toolCalls.find(
+                        (t) => t.id === (entry.data as Record<string, unknown>).toolCallId
+                      );
+                      return tc?.auditEntryId ? (
+                        <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                          <span className="font-mono text-[10px] bg-muted px-1 py-0.5 rounded">
+                            {tc.auditEntryId}
+                          </span>
+                          <span>Audit Record</span>
+                        </div>
+                      ) : null;
+                    })()}
                   </div>
                 </div>
               );
