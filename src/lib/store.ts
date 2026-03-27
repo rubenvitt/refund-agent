@@ -11,8 +11,10 @@ import type {
   HumanReview,
   ApprovalRequest,
   StructuredAuditEntry,
+  ToolCallLedger,
 } from './types';
 import { createSeedState } from './seed-data';
+import { createEmptyLedger } from './idempotency';
 import { defaultPromptConfig, defaultToolCatalog } from './default-prompts';
 
 // ── Chat Message ──
@@ -37,6 +39,7 @@ export type AppState = {
   error: string | null;
   approvalRequest: ApprovalRequest | null;
   chatMessages: ChatMessage[];
+  toolCallLedger: ToolCallLedger;
 };
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -59,6 +62,7 @@ function getInitialState(): AppState {
     error: null,
     approvalRequest: null,
     chatMessages: [],
+    toolCallLedger: createEmptyLedger(),
   };
 }
 
@@ -84,7 +88,9 @@ export type AppAction =
   | { type: 'RESET_TOOL_CATALOG' }
   | { type: 'RESET_ALL' }
   | { type: 'ADD_AUDIT_ENTRIES'; payload: StructuredAuditEntry[] }
-  | { type: 'CLEAR_AUDIT_LOG' };
+  | { type: 'CLEAR_AUDIT_LOG' }
+  | { type: 'UPDATE_LEDGER'; payload: ToolCallLedger }
+  | { type: 'CLEAR_LEDGER' };
 
 function reducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
@@ -124,7 +130,7 @@ function reducer(state: AppState, action: AppAction): AppState {
     case 'SET_CHAT_MESSAGES':
       return { ...state, chatMessages: action.payload };
     case 'RESET_DEMO_STATE':
-      return { ...state, demoState: createSeedState() };
+      return { ...state, demoState: createSeedState(), toolCallLedger: createEmptyLedger() };
     case 'RESET_PROMPT_CONFIG':
       return { ...state, promptConfig: defaultPromptConfig };
     case 'RESET_TOOL_CATALOG':
@@ -150,6 +156,10 @@ function reducer(state: AppState, action: AppAction): AppState {
           structuredAuditLog: [],
         },
       };
+    case 'UPDATE_LEDGER':
+      return { ...state, toolCallLedger: action.payload };
+    case 'CLEAR_LEDGER':
+      return { ...state, toolCallLedger: createEmptyLedger() };
     default:
       return state;
   }
@@ -168,6 +178,7 @@ const AppContext = createContext<AppContextValue | null>(null);
 
 const LS_KEY = 'support-agent-lab';
 const LS_KEY_AUDIT = 'support-agent-lab:audit';
+const LS_KEY_LEDGER = 'support-agent-lab:ledger';
 const MAX_AUDIT_ENTRIES = 200;
 
 function loadFromLocalStorage(): Partial<AppState> | null {
@@ -218,6 +229,26 @@ function loadAuditLog(): StructuredAuditEntry[] {
   }
 }
 
+function saveLedger(ledger: ToolCallLedger) {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(LS_KEY_LEDGER, JSON.stringify(ledger));
+  } catch {
+    // quota exceeded — silently ignore
+  }
+}
+
+function loadLedger(): ToolCallLedger | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(LS_KEY_LEDGER);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
 // ── Provider ──
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
@@ -241,6 +272,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (auditLog.length > 0) {
       dispatch({ type: 'ADD_AUDIT_ENTRIES', payload: auditLog });
     }
+    const savedLedger = loadLedger();
+    if (savedLedger) {
+      dispatch({ type: 'UPDATE_LEDGER', payload: savedLedger });
+    }
     setHydrated(true);
   }, []);
 
@@ -254,6 +289,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!hydrated) return;
     saveAuditLog(state.demoState.structuredAuditLog);
   }, [hydrated, state.demoState.structuredAuditLog]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    saveLedger(state.toolCallLedger);
+  }, [hydrated, state.toolCallLedger]);
 
   return React.createElement(
     AppContext.Provider,
