@@ -15,6 +15,7 @@ import type {
   StructuredAuditEntry,
   AuditOutcome,
   PolicyGateContext,
+  ToolCallLedger,
 } from './types';
 import { executeTool } from './tools';
 import {
@@ -26,6 +27,12 @@ import {
 } from './audit';
 import { TOOL_SCHEMAS } from './tool-schemas';
 import { evaluatePolicyGate, getAllowedToolsForRoute } from './policy-gate';
+import {
+  generateIdempotencyKey,
+  checkIdempotency,
+  addLedgerEntry,
+  createEmptyLedger,
+} from './idempotency';
 
 type WorkflowInput = {
   userMessage: string;
@@ -34,6 +41,7 @@ type WorkflowInput = {
   promptConfig: PromptConfig;
   toolCatalog: ToolCatalog;
   demoState: DemoState;
+  toolCallLedger: ToolCallLedger;
   pendingApproval?: { toolCallId: string; approved: boolean } | null;
 };
 
@@ -42,6 +50,7 @@ type WorkflowResult = {
   route: RouteDecision | null;
   trace: RunTrace;
   updatedState: DemoState;
+  updatedLedger: ToolCallLedger;
   auditEntries: StructuredAuditEntry[];
   approvalRequest?: {
     toolCallId: string;
@@ -309,6 +318,7 @@ export async function runWorkflow(
     promptConfig,
     toolCatalog,
     demoState,
+    toolCallLedger,
     pendingApproval,
   } = input;
 
@@ -321,6 +331,7 @@ export async function runWorkflow(
   let finalAnswer = '';
   let approvalRequest: WorkflowResult['approvalRequest'] = null;
   const auditEntries: StructuredAuditEntry[] = [];
+  let currentLedger = toolCallLedger;
   const promptVersion = hashPromptConfig(promptConfig);
   const toolCallCounts: Record<string, number> = {};
 
@@ -671,6 +682,44 @@ export async function runWorkflow(
             }
           }
 
+          // ── Idempotency check ──
+          const idempotencyKey = generateIdempotencyKey(name, args);
+
+          if (idempotencyKey !== null) {
+            const idempotencyResult = checkIdempotency(idempotencyKey, currentLedger);
+            currentLedger = idempotencyResult.prunedLedger;
+
+            if (idempotencyResult.status === 'duplicate') {
+              addTraceEntry(
+                traceEntries,
+                'idempotency_block',
+                {
+                  toolCallId,
+                  toolName: name,
+                  idempotencyKey,
+                  originalRunId: idempotencyResult.originalEntry.runId,
+                  originalToolCallId: idempotencyResult.originalEntry.toolCallId,
+                  replayedResult: idempotencyResult.originalEntry.result,
+                },
+                route!
+              );
+
+              const trace: ToolCallTrace = {
+                id: toolCallId,
+                toolName: name,
+                arguments: args,
+                result: idempotencyResult.originalEntry.result,
+                timestamp,
+                approvalRequired: meta.requiresApproval,
+                approvalStatus: meta.requiresApproval ? 'approved' : 'not_required',
+                auditEntryId: null,
+              };
+              toolCallTraces.push(trace);
+
+              return idempotencyResult.originalEntry.result;
+            }
+          }
+
           // ── Execute the tool (decision === 'allow') ──
           const executedAt = new Date().toISOString();
           const toolResult = executeTool(name, currentState, args);
@@ -725,6 +774,22 @@ export async function runWorkflow(
             };
             auditEntries.push(auditEntry);
             auditEntryId = auditEntry.id;
+
+            // Update ledger for idempotency tracking
+            if (idempotencyKey !== null) {
+              currentLedger = addLedgerEntry(
+                currentLedger,
+                name,
+                args,
+                idempotencyKey,
+                requestId,
+                toolCallId,
+                toolResult.result
+              );
+
+              // Patch the audit entry's idempotencyKey
+              auditEntry.idempotencyKey = idempotencyKey;
+            }
           }
 
           const traceRecord: ToolCallTrace = {
@@ -873,6 +938,7 @@ export async function runWorkflow(
     route,
     trace,
     updatedState: currentState,
+    updatedLedger: currentLedger,
     auditEntries,
     approvalRequest,
   };
