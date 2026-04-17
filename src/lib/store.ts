@@ -467,7 +467,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (savedRollout) {
       dispatch({ type: 'RESET_ROLLOUT' });
       for (const snap of savedRollout.snapshots) {
-        dispatch({ type: 'ADD_ROLLOUT_SNAPSHOT', payload: snap });
+        if (snap.toolDescriptionsHash) {
+          dispatch({ type: 'ADD_ROLLOUT_SNAPSHOT', payload: snap });
+        } else {
+          // Migrate legacy snapshots (pre-F7) that lack a baked hash.
+          hashToolDescriptions(snap.toolCatalog)
+            .then((toolDescriptionsHash) => {
+              dispatch({
+                type: 'ADD_ROLLOUT_SNAPSHOT',
+                payload: { ...snap, toolDescriptionsHash },
+              });
+            })
+            .catch(() => {
+              dispatch({
+                type: 'ADD_ROLLOUT_SNAPSHOT',
+                payload: { ...snap, toolDescriptionsHash: '' },
+              });
+            });
+        }
       }
       if (savedRollout.championId) {
         dispatch({ type: 'SET_ROLLOUT_CHAMPION', payload: savedRollout.championId });
