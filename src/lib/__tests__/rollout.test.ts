@@ -3,6 +3,7 @@ import {
   createSnapshot,
   createRolloutAuditEntry,
   createEmptyRolloutState,
+  hashToolDescriptions,
 } from '../rollout';
 import type { PromptConfig, ToolCatalog } from '../types';
 
@@ -26,20 +27,29 @@ const sampleToolCatalog: ToolCatalog = {
 };
 
 describe('createSnapshot', () => {
-  it('returns a snapshot with an snp_-prefixed id and an ISO timestamp', () => {
-    const snap = createSnapshot('Champion v1', samplePromptConfig, sampleToolCatalog, 'baseline');
+  it('returns a snapshot with an snp_-prefixed id, ISO timestamp, and passthrough of the provided hash', () => {
+    const snap = createSnapshot(
+      'Champion v1',
+      samplePromptConfig,
+      sampleToolCatalog,
+      'baseline',
+      'hash-xyz',
+    );
     expect(snap.id.startsWith('snp_')).toBe(true);
     expect(() => new Date(snap.createdAt).toISOString()).not.toThrow();
     expect(snap.label).toBe('Champion v1');
     expect(snap.notes).toBe('baseline');
     expect(snap.promptConfig).toEqual(samplePromptConfig);
     expect(snap.toolCatalog).toEqual(sampleToolCatalog);
+    expect(snap.toolDescriptionsHash).toBe('hash-xyz');
   });
 
   it('produces unique ids across calls', () => {
     const ids = new Set(
-      Array.from({ length: 50 }, () =>
-        createSnapshot('x', samplePromptConfig, sampleToolCatalog, '').id,
+      Array.from(
+        { length: 50 },
+        () =>
+          createSnapshot('x', samplePromptConfig, sampleToolCatalog, '', 'h').id,
       ),
     );
     expect(ids.size).toBe(50);
@@ -48,7 +58,7 @@ describe('createSnapshot', () => {
   it('deep-clones prompt and tool inputs so later mutations do not leak', () => {
     const prompt = { ...samplePromptConfig };
     const tools = { tools: [...sampleToolCatalog.tools] };
-    const snap = createSnapshot('x', prompt, tools, '');
+    const snap = createSnapshot('x', prompt, tools, '', 'h');
     prompt.orchestratorInstructions = 'mutated';
     tools.tools[0].description = 'mutated';
     expect(snap.promptConfig.orchestratorInstructions).toBe('orchestrator');
@@ -92,5 +102,64 @@ describe('createEmptyRolloutState', () => {
     expect(state.canaryPercent).toBe(0);
     expect(state.killSwitchActive).toBe(false);
     expect(state.auditLog).toEqual([]);
+    expect(state.shadowRunHistory).toEqual([]);
+  });
+});
+
+describe('hashToolDescriptions', () => {
+  it('produces a 64-char hex SHA-256', async () => {
+    const hash = await hashToolDescriptions(sampleToolCatalog);
+    expect(hash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('returns the same hash for the same input', async () => {
+    const a = await hashToolDescriptions(sampleToolCatalog);
+    const b = await hashToolDescriptions(sampleToolCatalog);
+    expect(a).toBe(b);
+  });
+
+  it('is stable under tool reordering', async () => {
+    const sorted: ToolCatalog = {
+      tools: [
+        { ...sampleToolCatalog.tools[0], name: 'a_tool' },
+        { ...sampleToolCatalog.tools[0], name: 'b_tool' },
+      ],
+    };
+    const reversed: ToolCatalog = {
+      tools: [...sorted.tools].reverse(),
+    };
+    expect(await hashToolDescriptions(sorted)).toBe(
+      await hashToolDescriptions(reversed),
+    );
+  });
+
+  it('changes when a tool description changes', async () => {
+    const before = await hashToolDescriptions(sampleToolCatalog);
+    const after = await hashToolDescriptions({
+      tools: [
+        {
+          ...sampleToolCatalog.tools[0],
+          description: 'look up an order (revised)',
+        },
+      ],
+    });
+    expect(before).not.toBe(after);
+  });
+
+  it('changes when a tool is added', async () => {
+    const before = await hashToolDescriptions(sampleToolCatalog);
+    const after = await hashToolDescriptions({
+      tools: [
+        ...sampleToolCatalog.tools,
+        {
+          name: 'refund_order',
+          description: 'refund an order',
+          parameters: { type: 'object', properties: {}, required: [] },
+          requiresApproval: true,
+          isDestructive: true,
+        },
+      ],
+    });
+    expect(before).not.toBe(after);
   });
 });

@@ -17,7 +17,7 @@ function initial(): AppState {
 
 describe('rollout reducer', () => {
   it('ADD_ROLLOUT_SNAPSHOT appends the snapshot', () => {
-    const snap = createSnapshot('Champion v1', promptConfig, toolCatalog, '');
+    const snap = createSnapshot('Champion v1', promptConfig, toolCatalog, '', 'h');
     const next = reducer(initial(), {
       type: 'ADD_ROLLOUT_SNAPSHOT',
       payload: snap,
@@ -27,14 +27,14 @@ describe('rollout reducer', () => {
   });
 
   it('SET_ROLLOUT_CHAMPION updates the championId', () => {
-    const snap = createSnapshot('Champion v1', promptConfig, toolCatalog, '');
+    const snap = createSnapshot('Champion v1', promptConfig, toolCatalog, '', 'h');
     const afterAdd = reducer(initial(), { type: 'ADD_ROLLOUT_SNAPSHOT', payload: snap });
     const next = reducer(afterAdd, { type: 'SET_ROLLOUT_CHAMPION', payload: snap.id });
     expect(next.rollout.championId).toBe(snap.id);
   });
 
   it('SET_ROLLOUT_CHALLENGER updates the challengerId; null clears it', () => {
-    const snap = createSnapshot('Challenger v1', promptConfig, toolCatalog, '');
+    const snap = createSnapshot('Challenger v1', promptConfig, toolCatalog, '', 'h');
     const afterAdd = reducer(initial(), { type: 'ADD_ROLLOUT_SNAPSHOT', payload: snap });
     const set = reducer(afterAdd, { type: 'SET_ROLLOUT_CHALLENGER', payload: snap.id });
     expect(set.rollout.challengerId).toBe(snap.id);
@@ -43,7 +43,7 @@ describe('rollout reducer', () => {
   });
 
   it('DELETE_ROLLOUT_SNAPSHOT removes it and clears references if champion/challenger', () => {
-    const snap = createSnapshot('doomed', promptConfig, toolCatalog, '');
+    const snap = createSnapshot('doomed', promptConfig, toolCatalog, '', 'h');
     let s = reducer(initial(), { type: 'ADD_ROLLOUT_SNAPSHOT', payload: snap });
     s = reducer(s, { type: 'SET_ROLLOUT_CHAMPION', payload: snap.id });
     s = reducer(s, { type: 'SET_ROLLOUT_CHALLENGER', payload: snap.id });
@@ -80,7 +80,7 @@ describe('rollout reducer', () => {
   });
 
   it('RESET_ALL resets rollout state too', () => {
-    const snap = createSnapshot('x', promptConfig, toolCatalog, '');
+    const snap = createSnapshot('x', promptConfig, toolCatalog, '', 'h');
     let s = reducer(initial(), { type: 'ADD_ROLLOUT_SNAPSHOT', payload: snap });
     s = reducer(s, { type: 'SET_ROLLOUT_CHAMPION', payload: snap.id });
     s = reducer(s, { type: 'RESET_ALL' });
@@ -98,5 +98,6 @@ describe('getInitialState rollout slice', () => {
     expect(s.rollout.canaryPercent).toBe(0);
     expect(s.rollout.killSwitchActive).toBe(false);
     expect(s.rollout.auditLog).toEqual([]);
+    expect(s.rollout.shadowRunHistory).toEqual([]);
   });
 });

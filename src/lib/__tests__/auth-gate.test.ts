@@ -94,7 +94,7 @@ describe('checkBolaPermission', () => {
   });
 
   it('allows C001 to reset own password', () => {
-    const result = checkBolaPermission('reset_password', { email: 'max@example.com' }, customerC001, state);
+    const result = checkBolaPermission('reset_password', { email: 'max.mustermann@example.com' }, customerC001, state);
     expect(result).toEqual({ allowed: true });
   });
 

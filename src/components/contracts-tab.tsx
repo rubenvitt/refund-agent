@@ -178,9 +178,9 @@ export function ContractsTab() {
   const [snapshotNotes, setSnapshotNotes] = useState('');
   const [snapshotSaved, setSnapshotSaved] = useState<string | null>(null);
 
-  const handleSaveSnapshot = () => {
+  const handleSaveSnapshot = async () => {
     const label = snapshotLabel.trim() || `Snapshot ${new Date().toISOString()}`;
-    const snap = saveSnapshot(label, snapshotNotes.trim());
+    const snap = await saveSnapshot(label, snapshotNotes.trim());
     setSnapshotLabel('');
     setSnapshotNotes('');
     setSnapshotSaved(snap.label);

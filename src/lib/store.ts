@@ -17,7 +17,12 @@ import type {
 import { createSeedState } from './seed-data';
 import { createEmptyLedger } from './idempotency';
 import { defaultPromptConfig, defaultToolCatalog } from './default-prompts';
-import { createEmptyRolloutState, createRolloutAuditEntry, createSnapshot } from './rollout';
+import {
+  createEmptyRolloutState,
+  createRolloutAuditEntry,
+  createSnapshot,
+  hashToolDescriptions,
+} from './rollout';
 import type { ConfigSnapshot, RolloutAuditEntry, RolloutState } from './types';
 
 // ── Chat Message ──
@@ -442,8 +447,15 @@ export function useSession() {
 export function useRollout() {
   const { state, dispatch } = useAppState();
 
-  const saveSnapshot = (label: string, notes: string) => {
-    const snap = createSnapshot(label, state.promptConfig, state.toolCatalog, notes);
+  const saveSnapshot = async (label: string, notes: string) => {
+    const toolDescriptionsHash = await hashToolDescriptions(state.toolCatalog);
+    const snap = createSnapshot(
+      label,
+      state.promptConfig,
+      state.toolCatalog,
+      notes,
+      toolDescriptionsHash,
+    );
     dispatch({ type: 'ADD_ROLLOUT_SNAPSHOT', payload: snap });
     dispatch({
       type: 'APPEND_ROLLOUT_AUDIT',
@@ -451,7 +463,7 @@ export function useRollout() {
         actor: { type: 'user' },
         action: 'snapshot_created',
         snapshotId: snap.id,
-        details: { label, notes },
+        details: { label, notes, toolDescriptionsHash },
       }),
     });
     return snap;

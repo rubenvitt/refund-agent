@@ -398,6 +398,14 @@ export type ConfigSnapshot = {
   promptConfig: PromptConfig;
   toolCatalog: ToolCatalog;
   notes: string;
+  toolDescriptionsHash: string;
+};
+
+export type ToolDescriptionIntegrityCheck = {
+  pass: boolean;
+  expectedHash: string;
+  actualHash: string;
+  changedTools: string[];
 };
 
 export type RolloutAuditAction =
@@ -405,7 +413,8 @@ export type RolloutAuditAction =
   | 'snapshot_deleted'
   | 'champion_set'
   | 'challenger_set'
-  | 'challenger_cleared';
+  | 'challenger_cleared'
+  | 'shadow_run_completed';
 
 export type RolloutAuditEntry = {
   id: string;
@@ -423,4 +432,40 @@ export type RolloutState = {
   canaryPercent: 0 | 5 | 25 | 50 | 100;
   killSwitchActive: boolean;
   auditLog: RolloutAuditEntry[];
+  shadowRunHistory: ShadowRunResult[];
+};
+
+export type DivergenceKind =
+  | 'identical'
+  | 'route_differs'
+  | 'tool_calls_differ'
+  | 'final_answer_differs'
+  | 'both_failed'
+  | 'champion_only_failed'
+  | 'challenger_only_failed';
+
+export type ShadowRunVariantOutcome = {
+  route: RouteDecision | null;
+  toolNames: string[];
+  finalAnswer: string;
+  mismatchCount: number;
+  error: string | null;
+};
+
+export type ShadowRunCaseResult = {
+  caseId: string;
+  userMessage: string;
+  champion: ShadowRunVariantOutcome;
+  challenger: ShadowRunVariantOutcome;
+  divergence: DivergenceKind;
+};
+
+export type ShadowRunResult = {
+  id: string;
+  startedAt: string;
+  completedAt: string;
+  championId: string;
+  challengerId: string;
+  caseResults: ShadowRunCaseResult[];
+  totals: { identical: number; divergent: number; failed: number };
 };
