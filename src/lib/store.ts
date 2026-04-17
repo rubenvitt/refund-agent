@@ -23,7 +23,12 @@ import {
   createSnapshot,
   hashToolDescriptions,
 } from './rollout';
-import type { ConfigSnapshot, RolloutAuditEntry, RolloutState } from './types';
+import type {
+  ConfigSnapshot,
+  RolloutAuditEntry,
+  RolloutState,
+  ShadowRunResult,
+} from './types';
 
 // ── Chat Message ──
 
@@ -109,6 +114,8 @@ export type AppAction =
   | { type: 'SET_ROLLOUT_CHAMPION'; payload: string | null }
   | { type: 'SET_ROLLOUT_CHALLENGER'; payload: string | null }
   | { type: 'APPEND_ROLLOUT_AUDIT'; payload: RolloutAuditEntry }
+  | { type: 'APPEND_SHADOW_RUN'; payload: ShadowRunResult }
+  | { type: 'CLEAR_SHADOW_RUNS' }
   | { type: 'RESET_ROLLOUT' };
 
 export function reducer(state: AppState, action: AppAction): AppState {
@@ -213,6 +220,22 @@ export function reducer(state: AppState, action: AppAction): AppState {
           auditLog: [...state.rollout.auditLog, action.payload],
         },
       };
+    case 'APPEND_SHADOW_RUN':
+      return {
+        ...state,
+        rollout: {
+          ...state.rollout,
+          shadowRunHistory: [
+            action.payload,
+            ...state.rollout.shadowRunHistory,
+          ].slice(0, MAX_SHADOW_RUN_HISTORY),
+        },
+      };
+    case 'CLEAR_SHADOW_RUNS':
+      return {
+        ...state,
+        rollout: { ...state.rollout, shadowRunHistory: [] },
+      };
     case 'RESET_ROLLOUT':
       return { ...state, rollout: createEmptyRolloutState() };
     default:
@@ -237,6 +260,7 @@ const LS_KEY_LEDGER = 'support-agent-lab:ledger';
 const LS_KEY_ROLLOUT = 'support-agent-lab:rollout';
 const MAX_AUDIT_ENTRIES = 200;
 const MAX_ROLLOUT_AUDIT_ENTRIES = 200;
+const MAX_SHADOW_RUN_HISTORY = 10;
 
 function loadFromLocalStorage(): Partial<AppState> | null {
   if (typeof window === 'undefined') return null;
@@ -314,6 +338,10 @@ function saveRollout(rollout: RolloutState) {
     const trimmed: RolloutState = {
       ...rollout,
       auditLog: rollout.auditLog.slice(-MAX_ROLLOUT_AUDIT_ENTRIES),
+      shadowRunHistory: rollout.shadowRunHistory.slice(
+        0,
+        MAX_SHADOW_RUN_HISTORY,
+      ),
     };
     localStorage.setItem(LS_KEY_ROLLOUT, JSON.stringify(trimmed));
   } catch {
@@ -376,6 +404,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
       for (const entry of savedRollout.auditLog) {
         dispatch({ type: 'APPEND_ROLLOUT_AUDIT', payload: entry });
+      }
+      // Replay oldest-first so the reducer's prepend-and-cap yields the
+      // correct newest-first order after hydration.
+      const history = savedRollout.shadowRunHistory ?? [];
+      for (const run of [...history].reverse()) {
+        dispatch({ type: 'APPEND_SHADOW_RUN', payload: run });
       }
     }
     setHydrated(true);
@@ -508,11 +542,35 @@ export function useRollout() {
     });
   };
 
+  const recordShadowRun = (run: ShadowRunResult) => {
+    dispatch({ type: 'APPEND_SHADOW_RUN', payload: run });
+    dispatch({
+      type: 'APPEND_ROLLOUT_AUDIT',
+      payload: createRolloutAuditEntry({
+        actor: { type: 'user' },
+        action: 'shadow_run_completed',
+        snapshotId: run.challengerId,
+        details: {
+          shadowRunId: run.id,
+          championId: run.championId,
+          totals: run.totals,
+          caseCount: run.caseResults.length,
+        },
+      }),
+    });
+  };
+
+  const clearShadowRuns = () => {
+    dispatch({ type: 'CLEAR_SHADOW_RUNS' });
+  };
+
   return {
     rollout: state.rollout,
     saveSnapshot,
     setChampion,
     setChallenger,
     deleteSnapshot,
+    recordShadowRun,
+    clearShadowRuns,
   };
 }

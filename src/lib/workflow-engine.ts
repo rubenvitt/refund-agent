@@ -36,7 +36,7 @@ import {
   createEmptyLedger,
 } from './idempotency';
 
-type WorkflowInput = {
+export type WorkflowInput = {
   userMessage: string;
   conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }>;
   settings: AppSettings;
@@ -48,7 +48,7 @@ type WorkflowInput = {
   session: UserSession | null;
 };
 
-type WorkflowResult = {
+export type WorkflowResult = {
   finalAnswer: string;
   route: RouteDecision | null;
   trace: RunTrace;
