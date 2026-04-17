@@ -437,6 +437,41 @@ export type RolloutAuditEntry = {
 export const DEFAULT_KILL_SWITCH_MESSAGE =
   'AI assistance is temporarily unavailable — a human agent will reach out.';
 
+export type GuardrailMetricId =
+  | 'mismatch_rate'
+  | 'tool_error_rate'
+  | 'latency_factor';
+
+export type GuardrailThreshold = {
+  threshold: number;
+  window: number;
+};
+
+export type GuardrailConfig = Record<GuardrailMetricId, GuardrailThreshold>;
+
+export type GuardrailSample = {
+  requestId: string;
+  timestamp: string;
+  variant: RolloutVariant;
+  mismatch: boolean;
+  toolError: boolean;
+  latencyMs: number;
+};
+
+export type GuardrailMetricEvaluation = {
+  metric: GuardrailMetricId;
+  value: number;
+  threshold: number;
+  window: number;
+  sampleCount: number;
+};
+
+export type GuardrailBreach = GuardrailMetricEvaluation & {
+  id: string;
+  timestamp: string;
+  previousCanaryPercent: CanaryPercent;
+};
+
 export type RolloutState = {
   snapshots: ConfigSnapshot[];
   championId: string | null;
@@ -446,6 +481,9 @@ export type RolloutState = {
   killSwitchMessage: string;
   auditLog: RolloutAuditEntry[];
   shadowRunHistory: ShadowRunResult[];
+  guardrailConfig: GuardrailConfig;
+  samples: GuardrailSample[];
+  breachHistory: GuardrailBreach[];
 };
 
 export type DivergenceKind =

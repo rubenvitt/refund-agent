@@ -29,9 +29,15 @@ import { useAppState, useRollout } from '@/lib/store';
 import { runShadow, type ShadowRunProgress } from '@/lib/shadow-runner';
 import { evalCases } from '@/lib/eval-cases';
 import { checkToolDescriptionIntegrity } from '@/lib/graders/tool-description-pin';
+import {
+  championBaseline,
+  evaluateMetric,
+} from '@/lib/rollout-guardrails';
 import type {
   ConfigSnapshot,
   DivergenceKind,
+  GuardrailBreach,
+  GuardrailMetricId,
   RolloutAuditEntry,
   ShadowRunResult,
   ToolDescriptionIntegrityCheck,
@@ -395,6 +401,139 @@ function CanaryControl({
   );
 }
 
+const METRIC_LABELS: Record<GuardrailMetricId, string> = {
+  mismatch_rate: 'mismatch rate',
+  tool_error_rate: 'tool error rate',
+  latency_factor: 'latency factor',
+};
+
+function formatMetricValue(metric: GuardrailMetricId, value: number): string {
+  if (metric === 'latency_factor') return `${value.toFixed(2)}x`;
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function formatThreshold(metric: GuardrailMetricId, threshold: number): string {
+  if (metric === 'latency_factor') return `${threshold.toFixed(2)}x`;
+  return `${(threshold * 100).toFixed(0)}%`;
+}
+
+function GuardrailPanel({
+  config,
+  samples,
+  breaches,
+  onClearBreaches,
+}: {
+  config: import('@/lib/types').GuardrailConfig;
+  samples: import('@/lib/types').GuardrailSample[];
+  breaches: GuardrailBreach[];
+  onClearBreaches: () => void;
+}) {
+  const metrics: GuardrailMetricId[] = [
+    'mismatch_rate',
+    'tool_error_rate',
+    'latency_factor',
+  ];
+  const baseline = championBaseline(
+    samples,
+    config.latency_factor.window,
+  );
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <ShieldCheck className="size-4 text-muted-foreground" />
+          Guardrails
+          <Badge className="bg-muted text-muted-foreground">
+            samples {samples.filter((s) => s.variant === 'challenger').length}
+          </Badge>
+          {breaches.length > 0 && (
+            <Badge className="bg-red-500/10 text-red-600 dark:text-red-400">
+              breaches {breaches.length}
+            </Badge>
+          )}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {breaches.length > 0 && (
+          <div className="space-y-2 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-400">
+            <div className="flex items-center justify-between">
+              <span className="font-medium">
+                <AlertTriangle className="mr-1 inline size-3.5" />
+                Guardrail breached — automatic rollback executed
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={onClearBreaches}
+              >
+                Dismiss
+              </Button>
+            </div>
+            <div className="space-y-1">
+              {breaches.slice(0, 3).map((breach) => (
+                <div key={breach.id} className="font-mono text-[11px]">
+                  {new Date(breach.timestamp).toLocaleTimeString()} ·{' '}
+                  {METRIC_LABELS[breach.metric]}{' '}
+                  {formatMetricValue(breach.metric, breach.value)} &gt;{' '}
+                  {formatThreshold(breach.metric, breach.threshold)} · rolled
+                  back from {breach.previousCanaryPercent}%
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        <div className="space-y-2">
+          {metrics.map((metric) => {
+            const evalResult = evaluateMetric(metric, samples, config, baseline);
+            const ratio =
+              evalResult.threshold > 0
+                ? Math.min(evalResult.value / evalResult.threshold, 1.5)
+                : 0;
+            const breached =
+              evalResult.sampleCount >= evalResult.window &&
+              evalResult.value > evalResult.threshold;
+            return (
+              <div key={metric} className="space-y-1">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">
+                    {METRIC_LABELS[metric]}
+                  </span>
+                  <span className="font-mono">
+                    {formatMetricValue(metric, evalResult.value)}{' '}
+                    <span className="text-muted-foreground">
+                      / {formatThreshold(metric, evalResult.threshold)} ·{' '}
+                      {evalResult.sampleCount}/{evalResult.window}
+                    </span>
+                  </span>
+                </div>
+                <div className="h-1.5 w-full overflow-hidden rounded bg-muted">
+                  <div
+                    className={`h-full transition-[width] duration-200 ${
+                      breached
+                        ? 'bg-red-500'
+                        : ratio > 0.75
+                          ? 'bg-amber-500'
+                          : 'bg-emerald-500'
+                    }`}
+                    style={{
+                      width: `${Math.min(100, (ratio / 1.5) * 100)}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          Challenger samples counted against rolling window · latency compared
+          to champion baseline
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
 function KillSwitchPanel({
   active,
   message,
@@ -464,6 +603,7 @@ export function RolloutTab() {
     setCanaryPercent,
     toggleKillSwitch,
     setKillSwitchMessage,
+    clearBreaches,
   } = useRollout();
   const { state } = useAppState();
 
@@ -587,6 +727,13 @@ export function RolloutTab() {
         hasChampion={!!champion}
         hasChallenger={!!challenger}
         onChange={(pct) => setCanaryPercent(pct)}
+      />
+
+      <GuardrailPanel
+        config={rollout.guardrailConfig}
+        samples={rollout.samples}
+        breaches={rollout.breachHistory}
+        onClearBreaches={clearBreaches}
       />
 
       <KillSwitchPanel
@@ -744,9 +891,9 @@ export function RolloutTab() {
 
       <Separator />
       <p className="text-[11px] text-muted-foreground">
-        Phase 3 scope adds canary routing (random per request), an auto-
-        rollback-ready data model, and the kill switch hook. Guardrails +
-        drift simulation arrive with the remaining tasks in this phase.
+        Phase 3 scope: canary routing (random per request), kill switch with
+        editable fallback, guardrails with auto-rollback on breach. Drift
+        simulation arrives in Phase 4.
       </p>
     </div>
   );

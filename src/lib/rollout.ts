@@ -11,6 +11,7 @@ import {
   type ToolCatalog,
 } from './types';
 import { generatePrefixedId } from './audit';
+import { createDefaultGuardrailConfig } from './rollout-guardrails';
 
 function canonicalizeToolDescriptions(catalog: ToolCatalog): string {
   return [...catalog.tools]
@@ -75,6 +76,9 @@ export function createEmptyRolloutState(): RolloutState {
     killSwitchMessage: DEFAULT_KILL_SWITCH_MESSAGE,
     auditLog: [],
     shadowRunHistory: [],
+    guardrailConfig: createDefaultGuardrailConfig(),
+    samples: [],
+    breachHistory: [],
   };
 }
 

@@ -26,6 +26,8 @@ import {
 import type {
   CanaryPercent,
   ConfigSnapshot,
+  GuardrailBreach,
+  GuardrailSample,
   RolloutAuditEntry,
   RolloutState,
   ShadowRunResult,
@@ -122,6 +124,9 @@ export type AppAction =
   | { type: 'SET_CANARY_PERCENT'; payload: CanaryPercent }
   | { type: 'SET_KILL_SWITCH'; payload: boolean }
   | { type: 'SET_KILL_SWITCH_MESSAGE'; payload: string }
+  | { type: 'APPEND_GUARDRAIL_SAMPLE'; payload: GuardrailSample }
+  | { type: 'RECORD_GUARDRAIL_BREACH'; payload: GuardrailBreach }
+  | { type: 'CLEAR_GUARDRAIL_BREACHES' }
   | { type: 'RESET_ROLLOUT' };
 
 export function reducer(state: AppState, action: AppAction): AppState {
@@ -257,6 +262,32 @@ export function reducer(state: AppState, action: AppAction): AppState {
         ...state,
         rollout: { ...state.rollout, killSwitchMessage: action.payload },
       };
+    case 'APPEND_GUARDRAIL_SAMPLE':
+      return {
+        ...state,
+        rollout: {
+          ...state.rollout,
+          samples: [...state.rollout.samples, action.payload].slice(
+            -MAX_GUARDRAIL_SAMPLES,
+          ),
+        },
+      };
+    case 'RECORD_GUARDRAIL_BREACH':
+      return {
+        ...state,
+        rollout: {
+          ...state.rollout,
+          breachHistory: [
+            action.payload,
+            ...state.rollout.breachHistory,
+          ].slice(0, MAX_BREACH_HISTORY),
+        },
+      };
+    case 'CLEAR_GUARDRAIL_BREACHES':
+      return {
+        ...state,
+        rollout: { ...state.rollout, breachHistory: [] },
+      };
     case 'RESET_ROLLOUT':
       return { ...state, rollout: createEmptyRolloutState() };
     default:
@@ -282,6 +313,8 @@ const LS_KEY_ROLLOUT = 'support-agent-lab:rollout';
 const MAX_AUDIT_ENTRIES = 200;
 const MAX_ROLLOUT_AUDIT_ENTRIES = 200;
 const MAX_SHADOW_RUN_HISTORY = 10;
+const MAX_GUARDRAIL_SAMPLES = 100;
+const MAX_BREACH_HISTORY = 20;
 
 function loadFromLocalStorage(): Partial<AppState> | null {
   if (typeof window === 'undefined') return null;
@@ -363,6 +396,8 @@ function saveRollout(rollout: RolloutState) {
         0,
         MAX_SHADOW_RUN_HISTORY,
       ),
+      samples: rollout.samples.slice(-MAX_GUARDRAIL_SAMPLES),
+      breachHistory: rollout.breachHistory.slice(0, MAX_BREACH_HISTORY),
     };
     localStorage.setItem(LS_KEY_ROLLOUT, JSON.stringify(trimmed));
   } catch {
@@ -449,6 +484,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           type: 'SET_KILL_SWITCH_MESSAGE',
           payload: savedRollout.killSwitchMessage,
         });
+      }
+      for (const sample of savedRollout.samples ?? []) {
+        dispatch({ type: 'APPEND_GUARDRAIL_SAMPLE', payload: sample });
+      }
+      const breaches = savedRollout.breachHistory ?? [];
+      for (const breach of [...breaches].reverse()) {
+        dispatch({ type: 'RECORD_GUARDRAIL_BREACH', payload: breach });
       }
     }
     setHydrated(true);
@@ -640,6 +682,32 @@ export function useRollout() {
     dispatch({ type: 'SET_KILL_SWITCH_MESSAGE', payload: message });
   };
 
+  const appendSample = (sample: GuardrailSample) => {
+    dispatch({ type: 'APPEND_GUARDRAIL_SAMPLE', payload: sample });
+  };
+
+  const recordBreach = (breach: GuardrailBreach) => {
+    dispatch({ type: 'RECORD_GUARDRAIL_BREACH', payload: breach });
+    dispatch({
+      type: 'APPEND_ROLLOUT_AUDIT',
+      payload: createRolloutAuditEntry({
+        actor: { type: 'system', component: 'rollout_guardrail' },
+        action: 'rolled_back_auto',
+        snapshotId: state.rollout.challengerId,
+        details: {
+          metric: breach.metric,
+          value: breach.value,
+          threshold: breach.threshold,
+          previousCanaryPercent: breach.previousCanaryPercent,
+        },
+      }),
+    });
+  };
+
+  const clearBreaches = () => {
+    dispatch({ type: 'CLEAR_GUARDRAIL_BREACHES' });
+  };
+
   return {
     rollout: state.rollout,
     saveSnapshot,
@@ -651,5 +719,8 @@ export function useRollout() {
     setCanaryPercent,
     toggleKillSwitch,
     setKillSwitchMessage,
+    appendSample,
+    recordBreach,
+    clearBreaches,
   };
 }

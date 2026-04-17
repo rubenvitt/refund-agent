@@ -10,7 +10,7 @@ import type {
  * Format: <prefix>_<13-digit-epoch-ms><8-random-hex-chars>
  */
 export function generatePrefixedId(
-  prefix: 'req' | 'tc' | 'ae' | 'snp' | 'rla' | 'shr',
+  prefix: 'req' | 'tc' | 'ae' | 'snp' | 'rla' | 'shr' | 'grb',
 ): string {
   const timestamp = Date.now().toString().padStart(13, '0');
   const random = Array.from(crypto.getRandomValues(new Uint8Array(4)))

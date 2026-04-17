@@ -270,4 +270,8 @@ Wenn diese Features stehen, liefert die Demo alle Screenshots und Videoclips fü
 - Phase 2 Plan: `docs/superpowers/plans/2026-04-17-rollout-phase2-shadow-and-integrity.md`
   - F2 Shadow Runner — erledigt (Phase 2)
   - F7 Tool-Description-Integrity-Grader — erledigt (Phase 2)
-- Phase 3–4 Features (F3 Canary, F4 Guardrails, F5 Kill-Switch-Controls, F6 Drift) — noch offen; jede Phase bekommt ihren eigenen Plan, sobald die vorige gemerged ist.
+- Phase 3 Plan: `docs/superpowers/plans/2026-04-17-rollout-phase3-canary-guardrails-killswitch.md`
+  - F3 Canary-Routing — erledigt (Phase 3)
+  - F4 Guardrails + Auto-Rollback — erledigt (Phase 3)
+  - F5 Kill-Switch — erledigt (Phase 3)
+- Phase 4 Features (F6 Drift-Simulation) — noch offen.

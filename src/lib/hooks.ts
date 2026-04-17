@@ -11,6 +11,12 @@ import { gradeWithLlm } from './llm-grader';
 import { optimizePrompts, type OptimizationResult } from './prompt-optimizer';
 import { createEmptyLedger } from './idempotency';
 import { pickVariant } from './rollout';
+import {
+  championBaseline,
+  createBreachRecord,
+  evaluateGuardrails,
+} from './rollout-guardrails';
+import type { GuardrailSample, RolloutVariant } from './types';
 
 export function useChat() {
   const { state, dispatch } = useAppState();
@@ -65,6 +71,7 @@ export function useChat() {
         });
         const activePromptConfig = picked.snapshot?.promptConfig ?? state.promptConfig;
         const activeToolCatalog = picked.snapshot?.toolCatalog ?? state.toolCatalog;
+        const runStartedAt = Date.now();
 
         const result = await runWorkflow({
           userMessage: content,
@@ -79,6 +86,7 @@ export function useChat() {
           toolCallLedger: state.toolCallLedger,
           session: state.session,
         });
+        const runLatencyMs = Date.now() - runStartedAt;
 
         const stampedTrace = {
           ...result.trace,
@@ -103,6 +111,55 @@ export function useChat() {
 
         if (result.approvalRequest) {
           dispatch({ type: 'SET_APPROVAL_REQUEST', payload: result.approvalRequest });
+        }
+
+        // Guardrails: sample every routed request so the breach detector has
+        // both champion-baseline and challenger data.
+        if (picked.variant) {
+          const sample: GuardrailSample = {
+            requestId: result.trace.requestId,
+            timestamp: new Date().toISOString(),
+            variant: picked.variant as RolloutVariant,
+            mismatch: result.trace.mismatches.length > 0,
+            toolError: result.auditEntries.some((e) => e.outcome === 'failed'),
+            latencyMs: runLatencyMs,
+          };
+          dispatch({ type: 'APPEND_GUARDRAIL_SAMPLE', payload: sample });
+
+          const nextSamples = [...state.rollout.samples, sample];
+          const baseline = championBaseline(
+            nextSamples,
+            state.rollout.guardrailConfig.latency_factor.window,
+          );
+          const breach = evaluateGuardrails(
+            nextSamples,
+            state.rollout.guardrailConfig,
+            baseline,
+          );
+          if (breach && state.rollout.canaryPercent > 0) {
+            const breachRecord = createBreachRecord(
+              breach,
+              state.rollout.canaryPercent,
+            );
+            dispatch({ type: 'SET_CANARY_PERCENT', payload: 0 });
+            dispatch({ type: 'RECORD_GUARDRAIL_BREACH', payload: breachRecord });
+            dispatch({
+              type: 'APPEND_ROLLOUT_AUDIT',
+              payload: {
+                id: crypto.randomUUID(),
+                timestamp: new Date().toISOString(),
+                actor: { type: 'system', component: 'rollout_guardrail' },
+                action: 'rolled_back_auto',
+                snapshotId: state.rollout.challengerId,
+                details: {
+                  metric: breach.metric,
+                  value: breach.value,
+                  threshold: breach.threshold,
+                  previousCanaryPercent: state.rollout.canaryPercent,
+                },
+              },
+            });
+          }
         }
       } catch (err) {
         dispatch({
