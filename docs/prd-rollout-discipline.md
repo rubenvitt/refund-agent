@@ -260,3 +260,11 @@ Für den Blogpost müssen folgende Screenshots reproduzierbar sein:
 ## Post-Anschluss
 
 Wenn diese Features stehen, liefert die Demo alle Screenshots und Videoclips für den Blogpost. Besonders der MCP-Drift-Moment (F6+F7) ist der emotionale Höhepunkt - alles grün, ein Klick, plötzlich rot, *ohne dass jemand den Challenger angefasst hat*. Genau die Story, die der Post erzählen soll.
+
+## Implementation Status
+
+- Phase 1 Plan: `docs/superpowers/plans/2026-04-17-rollout-phase1-snapshots-and-tab.md`
+  - F1 Versionierte Configs — erledigt (Phase 1)
+  - F8 Rollout-Tab (Status-Kopf, Snapshot-Liste, Audit-Panel) — erledigt (Phase 1)
+  - F9 Rollout-Audit-Events — erledigt (Phase 1)
+- Phase 2–4 Features (F2 Shadow, F3 Canary, F4 Guardrails, F5 Kill-Switch-Controls, F6 Drift, F7 Integrity-Grader) — noch offen; jede Phase bekommt ihren eigenen Plan, sobald die vorige gemerged ist.
