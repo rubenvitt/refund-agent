@@ -23,7 +23,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useAppState, useRollout } from '@/lib/store';
-import { runShadow } from '@/lib/shadow-runner';
+import { runShadow, type ShadowRunProgress } from '@/lib/shadow-runner';
 import { evalCases } from '@/lib/eval-cases';
 import { checkToolDescriptionIntegrity } from '@/lib/graders/tool-description-pin';
 import type {
@@ -164,14 +164,20 @@ function ShadowRunPanel({
   champion,
   challenger,
   lastRun,
+  historyCount,
   isRunning,
+  progress,
+  liveRun,
   onStart,
   onClear,
 }: {
   champion: ConfigSnapshot | null;
   challenger: ConfigSnapshot | null;
   lastRun: ShadowRunResult | null;
+  historyCount: number;
   isRunning: boolean;
+  progress: ShadowRunProgress | null;
+  liveRun: ShadowRunResult | null;
   onStart: () => void;
   onClear: () => void;
 }) {
@@ -180,6 +186,11 @@ function ShadowRunPanel({
     !champion || !challenger
       ? 'Set both Champion and Challenger to start.'
       : null;
+  const displayRun = liveRun ?? lastRun;
+  const pct =
+    progress && progress.totalCases > 0
+      ? Math.round((progress.completedCases / progress.totalCases) * 100)
+      : 0;
 
   return (
     <Card>
@@ -187,6 +198,9 @@ function ShadowRunPanel({
         <CardTitle className="flex items-center gap-2 text-base">
           <Play className="size-4 text-muted-foreground" />
           Shadow Run
+          <Badge className="bg-muted text-muted-foreground">
+            history {historyCount}
+          </Badge>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -199,7 +213,7 @@ function ShadowRunPanel({
             )}
             {isRunning ? 'Running…' : `Start (${evalCases.length} cases)`}
           </Button>
-          {lastRun && (
+          {(lastRun || historyCount > 0) && (
             <Button size="sm" variant="ghost" onClick={onClear}>
               <Trash2 className="size-3.5" />
               Clear history
@@ -212,25 +226,45 @@ function ShadowRunPanel({
           )}
         </div>
 
-        {lastRun ? (
+        {isRunning && progress && (
+          <div className="space-y-1 rounded-md border bg-muted/40 px-3 py-2 text-xs">
+            <div className="flex items-center justify-between">
+              <span>
+                Case {progress.completedCases + (progress.currentVariant === 'challenger' ? 1 : 0)}
+                {' / '}
+                {progress.totalCases} · running {progress.currentVariant} on{' '}
+                <span className="font-mono">{progress.currentCaseId}</span>
+              </span>
+              <span className="font-medium">{pct}%</span>
+            </div>
+            <div className="h-1 w-full overflow-hidden rounded bg-muted">
+              <div
+                className="h-full bg-primary transition-[width] duration-200"
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {displayRun ? (
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2 text-xs">
               <Badge className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-                identical {lastRun.totals.identical}
+                identical {displayRun.totals.identical}
               </Badge>
               <Badge className="bg-amber-500/10 text-amber-600 dark:text-amber-400">
-                divergent {lastRun.totals.divergent}
+                divergent {displayRun.totals.divergent}
               </Badge>
               <Badge className="bg-red-500/10 text-red-600 dark:text-red-400">
-                failed {lastRun.totals.failed}
+                failed {displayRun.totals.failed}
               </Badge>
               <span className="font-mono text-[10px] text-muted-foreground">
-                {lastRun.id} · {new Date(lastRun.completedAt).toLocaleString()}
+                {displayRun.id} · {isRunning ? 'in progress' : new Date(displayRun.completedAt).toLocaleString()}
               </span>
             </div>
             <ScrollArea className="max-h-72">
               <div className="space-y-1">
-                {lastRun.caseResults.map((r) => (
+                {displayRun.caseResults.map((r) => (
                   <div
                     key={r.caseId}
                     className="rounded-md border px-2 py-1.5 text-xs"
@@ -381,6 +415,12 @@ export function RolloutTab() {
     useState<ToolDescriptionIntegrityCheck | null>(null);
   const [isRunningShadow, setIsRunningShadow] = useState(false);
   const [shadowError, setShadowError] = useState<string | null>(null);
+  const [shadowProgress, setShadowProgress] = useState<ShadowRunProgress | null>(
+    null,
+  );
+  const [liveShadowRun, setLiveShadowRun] = useState<ShadowRunResult | null>(
+    null,
+  );
 
   useEffect(() => {
     if (!champion) {
@@ -404,18 +444,61 @@ export function RolloutTab() {
     if (!champion || !challenger) return;
     setShadowError(null);
     setIsRunningShadow(true);
+    setShadowProgress({
+      completedCases: 0,
+      totalCases: evalCases.length,
+      currentCaseId: evalCases[0]?.id ?? '',
+      currentVariant: 'champion',
+    });
+    // Seed a live run scaffold so the matrix card has an anchor to update
+    const runStartedAt = new Date().toISOString();
+    setLiveShadowRun({
+      id: 'shr_pending',
+      startedAt: runStartedAt,
+      completedAt: runStartedAt,
+      championId: champion.id,
+      challengerId: challenger.id,
+      caseResults: [],
+      totals: { identical: 0, divergent: 0, failed: 0 },
+    });
     try {
       const result = await runShadow({
         champion,
         challenger,
         cases: evalCases,
         settings: state.settings,
+        onProgress: setShadowProgress,
+        onCaseComplete: (caseResult) => {
+          setLiveShadowRun((prev) => {
+            if (!prev) return prev;
+            const nextCaseResults = [...prev.caseResults, caseResult];
+            const totals = nextCaseResults.reduce(
+              (acc, r) => {
+                if (r.divergence === 'identical') acc.identical += 1;
+                else if (
+                  r.divergence === 'both_failed' ||
+                  r.divergence === 'champion_only_failed' ||
+                  r.divergence === 'challenger_only_failed'
+                ) {
+                  acc.failed += 1;
+                } else {
+                  acc.divergent += 1;
+                }
+                return acc;
+              },
+              { identical: 0, divergent: 0, failed: 0 },
+            );
+            return { ...prev, caseResults: nextCaseResults, totals };
+          });
+        },
       });
+      setLiveShadowRun(result);
       recordShadowRun(result);
     } catch (err) {
       setShadowError(err instanceof Error ? err.message : String(err));
     } finally {
       setIsRunningShadow(false);
+      setShadowProgress(null);
     }
   };
 
@@ -447,9 +530,15 @@ export function RolloutTab() {
         champion={champion}
         challenger={challenger}
         lastRun={lastShadowRun}
+        historyCount={rollout.shadowRunHistory.length}
         isRunning={isRunningShadow}
+        progress={shadowProgress}
+        liveRun={liveShadowRun}
         onStart={handleStartShadow}
-        onClear={clearShadowRuns}
+        onClear={() => {
+          clearShadowRuns();
+          setLiveShadowRun(null);
+        }}
       />
       {shadowError && (
         <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-400">

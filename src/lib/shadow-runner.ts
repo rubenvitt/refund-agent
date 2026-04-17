@@ -16,6 +16,20 @@ import type { WorkflowInput, WorkflowResult } from './workflow-engine';
 
 type RunWorkflowFn = (input: WorkflowInput) => Promise<WorkflowResult>;
 
+export type ShadowRunProgress = {
+  completedCases: number;
+  totalCases: number;
+  currentCaseId: string;
+  currentVariant: 'champion' | 'challenger';
+};
+
+export type ShadowProgressCallback = (progress: ShadowRunProgress) => void;
+
+export type ShadowCaseCompleteCallback = (
+  result: ShadowRunCaseResult,
+  index: number,
+) => void;
+
 function outcomeFromResult(result: WorkflowResult): ShadowRunVariantOutcome {
   return {
     route: result.trace.route,
@@ -94,30 +108,54 @@ export async function runShadow(options: {
   cases: EvalCase[];
   settings: AppSettings;
   runWorkflow?: RunWorkflowFn;
+  onProgress?: ShadowProgressCallback;
+  onCaseComplete?: ShadowCaseCompleteCallback;
 }): Promise<ShadowRunResult> {
   const runWorkflow = options.runWorkflow ?? defaultRunWorkflow;
   const startedAt = new Date().toISOString();
+  const total = options.cases.length;
 
   const caseResults: ShadowRunCaseResult[] = [];
-  for (const evalCase of options.cases) {
+  for (let i = 0; i < options.cases.length; i += 1) {
+    const evalCase = options.cases[i];
+    options.onProgress?.({
+      completedCases: i,
+      totalCases: total,
+      currentCaseId: evalCase.id,
+      currentVariant: 'champion',
+    });
     const championRun = await runVariant(
       options.champion,
       evalCase,
       options.settings,
       runWorkflow,
     );
+    options.onProgress?.({
+      completedCases: i,
+      totalCases: total,
+      currentCaseId: evalCase.id,
+      currentVariant: 'challenger',
+    });
     const challengerRun = await runVariant(
       options.challenger,
       evalCase,
       options.settings,
       runWorkflow,
     );
-    caseResults.push({
+    const caseResult: ShadowRunCaseResult = {
       caseId: evalCase.id,
       userMessage: evalCase.userMessage,
       champion: championRun.outcome,
       challenger: challengerRun.outcome,
       divergence: classifyDivergence(championRun.outcome, challengerRun.outcome),
+    };
+    caseResults.push(caseResult);
+    options.onCaseComplete?.(caseResult, i);
+    options.onProgress?.({
+      completedCases: i + 1,
+      totalCases: total,
+      currentCaseId: evalCase.id,
+      currentVariant: 'challenger',
     });
   }
 
