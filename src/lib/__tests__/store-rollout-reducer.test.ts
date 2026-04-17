@@ -89,6 +89,16 @@ describe('rollout reducer', () => {
   });
 });
 
+describe('SET_CANARY_PERCENT', () => {
+  it('updates the canaryPercent', () => {
+    const next = reducer(getInitialState(), {
+      type: 'SET_CANARY_PERCENT',
+      payload: 25,
+    });
+    expect(next.rollout.canaryPercent).toBe(25);
+  });
+});
+
 describe('getInitialState rollout slice', () => {
   it('includes an empty rollout state', () => {
     const s = getInitialState();

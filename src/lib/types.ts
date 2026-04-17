@@ -209,6 +209,8 @@ export type TraceEntry = {
   data: Record<string, unknown>;
 };
 
+export type RolloutVariant = 'champion' | 'challenger';
+
 export type RunTrace = {
   id: string;
   requestId: string;
@@ -222,6 +224,8 @@ export type RunTrace = {
   finalAnswer: string | null;
   stateChanges: Array<{ field: string; before: unknown; after: unknown }>;
   auditEntryIds: string[];
+  configSnapshotId?: string | null;
+  variant?: RolloutVariant | null;
 };
 
 // ── Evals ──
@@ -414,7 +418,12 @@ export type RolloutAuditAction =
   | 'champion_set'
   | 'challenger_set'
   | 'challenger_cleared'
-  | 'shadow_run_completed';
+  | 'shadow_run_completed'
+  | 'canary_promoted'
+  | 'kill_switch_toggled'
+  | 'rolled_back_auto';
+
+export type CanaryPercent = 0 | 5 | 25 | 50 | 100;
 
 export type RolloutAuditEntry = {
   id: string;
@@ -429,7 +438,7 @@ export type RolloutState = {
   snapshots: ConfigSnapshot[];
   championId: string | null;
   challengerId: string | null;
-  canaryPercent: 0 | 5 | 25 | 50 | 100;
+  canaryPercent: CanaryPercent;
   killSwitchActive: boolean;
   auditLog: RolloutAuditEntry[];
   shadowRunHistory: ShadowRunResult[];

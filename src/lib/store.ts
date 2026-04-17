@@ -24,6 +24,7 @@ import {
   hashToolDescriptions,
 } from './rollout';
 import type {
+  CanaryPercent,
   ConfigSnapshot,
   RolloutAuditEntry,
   RolloutState,
@@ -36,6 +37,8 @@ export type ChatMessage = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  variant?: 'champion' | 'challenger' | null;
+  configSnapshotLabel?: string | null;
 };
 
 // ── State Shape ──
@@ -116,6 +119,7 @@ export type AppAction =
   | { type: 'APPEND_ROLLOUT_AUDIT'; payload: RolloutAuditEntry }
   | { type: 'APPEND_SHADOW_RUN'; payload: ShadowRunResult }
   | { type: 'CLEAR_SHADOW_RUNS' }
+  | { type: 'SET_CANARY_PERCENT'; payload: CanaryPercent }
   | { type: 'RESET_ROLLOUT' };
 
 export function reducer(state: AppState, action: AppAction): AppState {
@@ -235,6 +239,11 @@ export function reducer(state: AppState, action: AppAction): AppState {
       return {
         ...state,
         rollout: { ...state.rollout, shadowRunHistory: [] },
+      };
+    case 'SET_CANARY_PERCENT':
+      return {
+        ...state,
+        rollout: { ...state.rollout, canaryPercent: action.payload },
       };
     case 'RESET_ROLLOUT':
       return { ...state, rollout: createEmptyRolloutState() };
@@ -564,6 +573,25 @@ export function useRollout() {
     dispatch({ type: 'CLEAR_SHADOW_RUNS' });
   };
 
+  const setCanaryPercent = (
+    pct: CanaryPercent,
+    actor: 'user' | 'system' = 'user',
+  ) => {
+    dispatch({ type: 'SET_CANARY_PERCENT', payload: pct });
+    dispatch({
+      type: 'APPEND_ROLLOUT_AUDIT',
+      payload: createRolloutAuditEntry({
+        actor:
+          actor === 'user'
+            ? { type: 'user' }
+            : { type: 'system', component: 'rollout' },
+        action: pct === 0 && actor === 'system' ? 'rolled_back_auto' : 'canary_promoted',
+        snapshotId: state.rollout.challengerId,
+        details: { to: pct, from: state.rollout.canaryPercent },
+      }),
+    });
+  };
+
   return {
     rollout: state.rollout,
     saveSnapshot,
@@ -572,5 +600,6 @@ export function useRollout() {
     deleteSnapshot,
     recordShadowRun,
     clearShadowRuns,
+    setCanaryPercent,
   };
 }

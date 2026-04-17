@@ -4,6 +4,7 @@ import {
   createRolloutAuditEntry,
   createEmptyRolloutState,
   hashToolDescriptions,
+  pickVariant,
 } from '../rollout';
 import type { PromptConfig, ToolCatalog } from '../types';
 
@@ -161,5 +162,74 @@ describe('hashToolDescriptions', () => {
       ],
     });
     expect(before).not.toBe(after);
+  });
+});
+
+describe('pickVariant', () => {
+  const champion = createSnapshot('c', samplePromptConfig, sampleToolCatalog, '', 'h');
+  const challenger = createSnapshot('ch', samplePromptConfig, sampleToolCatalog, '', 'h');
+
+  it('returns no variant when no champion is set', () => {
+    const picked = pickVariant({
+      champion: null,
+      challenger,
+      canaryPercent: 50,
+      randomFn: () => 0,
+    });
+    expect(picked.variant).toBeNull();
+    expect(picked.snapshot).toBeNull();
+  });
+
+  it('always returns champion at 0%', () => {
+    const picked = pickVariant({
+      champion,
+      challenger,
+      canaryPercent: 0,
+      randomFn: () => 0,
+    });
+    expect(picked.variant).toBe('champion');
+    expect(picked.snapshot).toBe(champion);
+  });
+
+  it('always returns challenger at 100%', () => {
+    const picked = pickVariant({
+      champion,
+      challenger,
+      canaryPercent: 100,
+      randomFn: () => 0.99,
+    });
+    expect(picked.variant).toBe('challenger');
+    expect(picked.snapshot).toBe(challenger);
+  });
+
+  it('routes to challenger when roll falls below threshold', () => {
+    const picked = pickVariant({
+      champion,
+      challenger,
+      canaryPercent: 25,
+      randomFn: () => 0.24,
+    });
+    expect(picked.variant).toBe('challenger');
+  });
+
+  it('routes to champion when roll meets or exceeds threshold', () => {
+    const picked = pickVariant({
+      champion,
+      challenger,
+      canaryPercent: 25,
+      randomFn: () => 0.25,
+    });
+    expect(picked.variant).toBe('champion');
+  });
+
+  it('falls back to champion when no challenger is set regardless of percent', () => {
+    const picked = pickVariant({
+      champion,
+      challenger: null,
+      canaryPercent: 50,
+      randomFn: () => 0,
+    });
+    expect(picked.variant).toBe('champion');
+    expect(picked.snapshot).toBe(champion);
   });
 });

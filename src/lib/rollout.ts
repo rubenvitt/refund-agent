@@ -1,10 +1,12 @@
 import type {
   AuditActor,
+  CanaryPercent,
   ConfigSnapshot,
   PromptConfig,
   RolloutAuditAction,
   RolloutAuditEntry,
   RolloutState,
+  RolloutVariant,
   ToolCatalog,
 } from './types';
 import { generatePrefixedId } from './audit';
@@ -72,4 +74,33 @@ export function createEmptyRolloutState(): RolloutState {
     auditLog: [],
     shadowRunHistory: [],
   };
+}
+
+export type PickedVariant = {
+  variant: RolloutVariant | null;
+  snapshot: ConfigSnapshot | null;
+};
+
+export function pickVariant(options: {
+  champion: ConfigSnapshot | null;
+  challenger: ConfigSnapshot | null;
+  canaryPercent: CanaryPercent;
+  randomFn?: () => number;
+}): PickedVariant {
+  const { champion, challenger, canaryPercent } = options;
+  const rand = options.randomFn ?? Math.random;
+
+  if (!champion) {
+    return { variant: null, snapshot: null };
+  }
+  if (!challenger || canaryPercent === 0) {
+    return { variant: 'champion', snapshot: champion };
+  }
+  if (canaryPercent === 100) {
+    return { variant: 'challenger', snapshot: challenger };
+  }
+  const roll = rand();
+  return roll < canaryPercent / 100
+    ? { variant: 'challenger', snapshot: challenger }
+    : { variant: 'champion', snapshot: champion };
 }

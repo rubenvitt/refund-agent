@@ -302,6 +302,62 @@ function IntegrityBanner({
   );
 }
 
+const CANARY_STEPS: Array<0 | 5 | 25 | 50 | 100> = [0, 5, 25, 50, 100];
+
+function CanaryControl({
+  canaryPercent,
+  hasChampion,
+  hasChallenger,
+  onChange,
+}: {
+  canaryPercent: number;
+  hasChampion: boolean;
+  hasChallenger: boolean;
+  onChange: (pct: 0 | 5 | 25 | 50 | 100) => void;
+}) {
+  const gating = !hasChampion
+    ? 'Set a Champion to control canary traffic.'
+    : !hasChallenger
+      ? 'Set a Challenger to route above 0%.'
+      : null;
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Gauge className="size-4 text-muted-foreground" />
+          Canary
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {CANARY_STEPS.map((pct) => {
+            const active = pct === canaryPercent;
+            const disabled = !hasChampion || (pct > 0 && !hasChallenger);
+            return (
+              <Button
+                key={pct}
+                size="sm"
+                variant={active ? 'default' : 'outline'}
+                onClick={() => onChange(pct)}
+                disabled={disabled}
+              >
+                {pct}%
+              </Button>
+            );
+          })}
+          <span className="text-xs text-muted-foreground">
+            Random per request · current {canaryPercent}% to challenger
+          </span>
+        </div>
+        {gating && (
+          <div className="text-xs text-muted-foreground">{gating}</div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export function RolloutTab() {
   const {
     rollout,
@@ -310,6 +366,7 @@ export function RolloutTab() {
     deleteSnapshot,
     recordShadowRun,
     clearShadowRuns,
+    setCanaryPercent,
   } = useRollout();
   const { state } = useAppState();
 
@@ -367,7 +424,7 @@ export function RolloutTab() {
       <div className="flex items-center gap-2">
         <Rocket className="size-5 text-muted-foreground" />
         <h2 className="text-lg font-semibold">Rollout</h2>
-        <Badge className="bg-muted text-muted-foreground">Phase 2</Badge>
+        <Badge className="bg-muted text-muted-foreground">Phase 3</Badge>
       </div>
 
       <StatusHeader
@@ -378,6 +435,13 @@ export function RolloutTab() {
       />
 
       <IntegrityBanner check={integrityCheck} />
+
+      <CanaryControl
+        canaryPercent={rollout.canaryPercent}
+        hasChampion={!!champion}
+        hasChallenger={!!challenger}
+        onChange={(pct) => setCanaryPercent(pct)}
+      />
 
       <ShadowRunPanel
         champion={champion}
@@ -521,9 +585,9 @@ export function RolloutTab() {
 
       <Separator />
       <p className="text-[11px] text-muted-foreground">
-        Phase 2 scope: versioned configs, shadow runs, tool-description
-        integrity, status view, audit log. Canary routing, guardrails, kill
-        switch, and drift simulation arrive in later phases.
+        Phase 3 scope adds canary routing (random per request), an auto-
+        rollback-ready data model, and the kill switch hook. Guardrails +
+        drift simulation arrive with the remaining tasks in this phase.
       </p>
     </div>
   );

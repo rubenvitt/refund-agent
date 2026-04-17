@@ -316,9 +316,25 @@ export function PlaygroundTab() {
                     }`}
                   >
                     {msg.role === 'assistant' ? (
-                      <Markdown components={mdComponents}>
-                        {msg.content}
-                      </Markdown>
+                      <div className="space-y-1">
+                        {msg.variant && (
+                          <div
+                            className={`inline-flex items-center rounded-sm px-1.5 py-0.5 text-[10px] font-medium ${
+                              msg.variant === 'challenger'
+                                ? 'bg-sky-500/10 text-sky-700 dark:text-sky-400'
+                                : 'bg-amber-500/10 text-amber-700 dark:text-amber-400'
+                            }`}
+                          >
+                            via {msg.variant}
+                            {msg.configSnapshotLabel
+                              ? ` · ${msg.configSnapshotLabel}`
+                              : ''}
+                          </div>
+                        )}
+                        <Markdown components={mdComponents}>
+                          {msg.content}
+                        </Markdown>
+                      </div>
                     ) : (
                       <p className="whitespace-pre-wrap">{msg.content}</p>
                     )}
