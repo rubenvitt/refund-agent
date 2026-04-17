@@ -274,4 +274,4 @@ Wenn diese Features stehen, liefert die Demo alle Screenshots und Videoclips fü
   - F3 Canary-Routing — erledigt (Phase 3)
   - F4 Guardrails + Auto-Rollback — erledigt (Phase 3)
   - F5 Kill-Switch — erledigt (Phase 3)
-- Phase 4 Features (F6 Drift-Simulation) — noch offen.
+- Phase 4: F6 Drift-Simulation — erledigt. Alle PRD-Features F1–F9 stehen jetzt auf `post/rollout-discipline`.

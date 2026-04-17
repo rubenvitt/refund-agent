@@ -16,6 +16,7 @@ import {
   CircleX,
   CircleDashed,
   Loader2,
+  Zap,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -33,6 +34,7 @@ import {
   championBaseline,
   evaluateMetric,
 } from '@/lib/rollout-guardrails';
+import { DRIFT_SCENARIOS } from '@/lib/drift-scenarios';
 import type {
   ConfigSnapshot,
   DivergenceKind,
@@ -326,20 +328,35 @@ function ShadowRunPanel({
 
 function IntegrityBanner({
   check,
+  driftedTools,
 }: {
   check: ToolDescriptionIntegrityCheck | null;
+  driftedTools: string[];
 }) {
   if (!check || check.pass) return null;
+  const tools =
+    check.changedTools.length > 0 ? check.changedTools : driftedTools;
   return (
     <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-400">
       <div className="flex items-center gap-2 font-medium">
         <AlertTriangle className="size-3.5" />
-        Tool-description drift on Champion
+        Tool-description hash drift on Champion
       </div>
       <div className="mt-1">
-        Current catalog hash differs from the snapshot. Changed tools:{' '}
-        <span className="font-mono">{check.changedTools.join(', ') || '—'}</span>
-        . Review in the Contracts tab before shipping.
+        Champion snapshot hash{' '}
+        <span className="font-mono">
+          {check.expectedHash.slice(0, 10)}
+        </span>{' '}
+        no longer matches its current catalog{' '}
+        <span className="font-mono">{check.actualHash.slice(0, 10)}</span>.
+        {tools.length > 0 && (
+          <>
+            {' '}
+            Affected tools:{' '}
+            <span className="font-mono">{tools.join(', ')}</span>.
+          </>
+        )}{' '}
+        Re-run shadow or restore from a clean snapshot before shipping.
       </div>
     </div>
   );
@@ -534,6 +551,157 @@ function GuardrailPanel({
   );
 }
 
+function DriftPanel({
+  hasChampion,
+  hasChallenger,
+  onApply,
+  recentDrifts,
+}: {
+  hasChampion: boolean;
+  hasChallenger: boolean;
+  onApply: (
+    scenarioId: string,
+    target: 'champion' | 'challenger',
+  ) => Promise<{ applied: boolean; reason?: string }>;
+  recentDrifts: RolloutAuditEntry[];
+}) {
+  const [scenarioId, setScenarioId] = useState<string>(
+    DRIFT_SCENARIOS[0]?.id ?? '',
+  );
+  const [target, setTarget] = useState<'champion' | 'challenger'>('champion');
+  const [status, setStatus] = useState<
+    { kind: 'idle' } | { kind: 'ok'; label: string } | { kind: 'err'; reason: string }
+  >({ kind: 'idle' });
+
+  const scenario = DRIFT_SCENARIOS.find((s) => s.id === scenarioId);
+  const disabled =
+    (target === 'champion' ? !hasChampion : !hasChallenger) || !scenario;
+
+  const handleApply = async () => {
+    if (!scenario) return;
+    const res = await onApply(scenarioId, target);
+    if (res.applied) {
+      setStatus({ kind: 'ok', label: scenario.label });
+    } else {
+      setStatus({ kind: 'err', reason: res.reason ?? 'unknown' });
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Zap className="size-4 text-muted-foreground" />
+          Drift Simulation
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-xs text-muted-foreground">
+          Simulates an upstream MCP vendor mutating a tool description without
+          notice. The target snapshot is rewritten in place; its stored
+          integrity hash is left untouched so the banner fires.
+        </p>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto_auto]">
+          <select
+            value={scenarioId}
+            onChange={(e) => setScenarioId(e.target.value)}
+            className="h-8 rounded-md border bg-transparent px-2 text-xs"
+          >
+            {DRIFT_SCENARIOS.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+          <div className="flex items-center gap-1 text-xs">
+            <label className="flex items-center gap-1">
+              <input
+                type="radio"
+                checked={target === 'champion'}
+                onChange={() => setTarget('champion')}
+              />
+              Champion
+            </label>
+            <label className="flex items-center gap-1">
+              <input
+                type="radio"
+                checked={target === 'challenger'}
+                onChange={() => setTarget('challenger')}
+              />
+              Challenger
+            </label>
+          </div>
+          <Button size="sm" onClick={handleApply} disabled={disabled}>
+            <Zap className="size-3.5" />
+            Apply drift
+          </Button>
+        </div>
+        {scenario && (
+          <p className="text-[11px] text-muted-foreground">
+            <span className="font-mono">{scenario.targetToolName}</span>:{' '}
+            {scenario.description}
+          </p>
+        )}
+        {status.kind === 'ok' && (
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+            Applied: {status.label}. Integrity banner should light up and a
+            shadow re-run will highlight the change.
+          </div>
+        )}
+        {status.kind === 'err' && (
+          <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-400">
+            Could not apply drift: {status.reason}.
+          </div>
+        )}
+
+        {recentDrifts.length > 0 && (
+          <div>
+            <div className="pb-1 text-xs font-medium text-muted-foreground">
+              Recent drift events
+            </div>
+            <ScrollArea className="max-h-36">
+              <div className="space-y-1">
+                {recentDrifts.map((entry) => {
+                  const details = entry.details as {
+                    scenarioLabel?: string;
+                    target?: string;
+                    targetTool?: string;
+                    beforeHash?: string;
+                    afterHash?: string;
+                  };
+                  return (
+                    <div
+                      key={entry.id}
+                      className="rounded-md border px-2 py-1 text-[11px]"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Badge className="bg-muted text-muted-foreground">
+                          {details.target ?? '—'}
+                        </Badge>
+                        <span className="font-medium">
+                          {details.scenarioLabel ?? 'drift'}
+                        </span>
+                        <span className="font-mono text-muted-foreground">
+                          {details.targetTool}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+                        {details.beforeHash?.slice(0, 10)} →{' '}
+                        {details.afterHash?.slice(0, 10)} ·{' '}
+                        {new Date(entry.timestamp).toLocaleTimeString()}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </ScrollArea>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function KillSwitchPanel({
   active,
   message,
@@ -604,6 +772,7 @@ export function RolloutTab() {
     toggleKillSwitch,
     setKillSwitchMessage,
     clearBreaches,
+    applyDrift,
   } = useRollout();
   const { state } = useAppState();
 
@@ -631,7 +800,11 @@ export function RolloutTab() {
       return;
     }
     let cancelled = false;
-    checkToolDescriptionIntegrity(champion, state.toolCatalog)
+    // Self-check: hash the snapshot's own toolCatalog and compare against the
+    // hash that was baked in at creation. Drift simulation mutates the
+    // snapshot's catalog in place without updating the hash, so this check
+    // trips immediately afterwards.
+    checkToolDescriptionIntegrity(champion, champion.toolCatalog)
       .then((result) => {
         if (!cancelled) setIntegrityCheck(result);
       })
@@ -641,7 +814,7 @@ export function RolloutTab() {
     return () => {
       cancelled = true;
     };
-  }, [champion, state.toolCatalog]);
+  }, [champion]);
 
   const handleStartShadow = async () => {
     if (!champion || !challenger) return;
@@ -710,7 +883,7 @@ export function RolloutTab() {
       <div className="flex items-center gap-2">
         <Rocket className="size-5 text-muted-foreground" />
         <h2 className="text-lg font-semibold">Rollout</h2>
-        <Badge className="bg-muted text-muted-foreground">Phase 3</Badge>
+        <Badge className="bg-muted text-muted-foreground">Phase 4</Badge>
       </div>
 
       <StatusHeader
@@ -720,7 +893,24 @@ export function RolloutTab() {
         killSwitchActive={rollout.killSwitchActive}
       />
 
-      <IntegrityBanner check={integrityCheck} />
+      <IntegrityBanner
+        check={integrityCheck}
+        driftedTools={Array.from(
+          new Set(
+            rollout.auditLog
+              .filter(
+                (e) =>
+                  e.action === 'tool_description_drifted' &&
+                  e.snapshotId === rollout.championId,
+              )
+              .map(
+                (e) =>
+                  (e.details as { targetTool?: string }).targetTool ?? '',
+              )
+              .filter(Boolean),
+          ),
+        )}
+      />
 
       <CanaryControl
         canaryPercent={rollout.canaryPercent}
@@ -734,6 +924,17 @@ export function RolloutTab() {
         samples={rollout.samples}
         breaches={rollout.breachHistory}
         onClearBreaches={clearBreaches}
+      />
+
+      <DriftPanel
+        hasChampion={!!champion}
+        hasChallenger={!!challenger}
+        onApply={applyDrift}
+        recentDrifts={rollout.auditLog
+          .filter((e) => e.action === 'tool_description_drifted')
+          .slice()
+          .reverse()
+          .slice(0, 5)}
       />
 
       <KillSwitchPanel
@@ -891,9 +1092,9 @@ export function RolloutTab() {
 
       <Separator />
       <p className="text-[11px] text-muted-foreground">
-        Phase 3 scope: canary routing (random per request), kill switch with
-        editable fallback, guardrails with auto-rollback on breach. Drift
-        simulation arrives in Phase 4.
+        Full rollout loop: snapshots, shadow runs, tool-description
+        integrity, canary with auto-rollback guardrails, kill switch, drift
+        simulation.
       </p>
     </div>
   );

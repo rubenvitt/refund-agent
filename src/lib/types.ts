@@ -421,7 +421,8 @@ export type RolloutAuditAction =
   | 'shadow_run_completed'
   | 'canary_promoted'
   | 'kill_switch_toggled'
-  | 'rolled_back_auto';
+  | 'rolled_back_auto'
+  | 'tool_description_drifted';
 
 export type CanaryPercent = 0 | 5 | 25 | 50 | 100;
 

@@ -23,6 +23,7 @@ import {
   createSnapshot,
   hashToolDescriptions,
 } from './rollout';
+import { applyDriftToCatalog, findDriftScenario } from './drift-scenarios';
 import type {
   CanaryPercent,
   ConfigSnapshot,
@@ -124,6 +125,10 @@ export type AppAction =
   | { type: 'SET_CANARY_PERCENT'; payload: CanaryPercent }
   | { type: 'SET_KILL_SWITCH'; payload: boolean }
   | { type: 'SET_KILL_SWITCH_MESSAGE'; payload: string }
+  | {
+      type: 'UPDATE_SNAPSHOT_TOOL_CATALOG';
+      payload: { snapshotId: string; toolCatalog: ToolCatalog };
+    }
   | { type: 'APPEND_GUARDRAIL_SAMPLE'; payload: GuardrailSample }
   | { type: 'RECORD_GUARDRAIL_BREACH'; payload: GuardrailBreach }
   | { type: 'CLEAR_GUARDRAIL_BREACHES' }
@@ -261,6 +266,18 @@ export function reducer(state: AppState, action: AppAction): AppState {
       return {
         ...state,
         rollout: { ...state.rollout, killSwitchMessage: action.payload },
+      };
+    case 'UPDATE_SNAPSHOT_TOOL_CATALOG':
+      return {
+        ...state,
+        rollout: {
+          ...state.rollout,
+          snapshots: state.rollout.snapshots.map((snap) =>
+            snap.id === action.payload.snapshotId
+              ? { ...snap, toolCatalog: action.payload.toolCatalog }
+              : snap,
+          ),
+        },
       };
     case 'APPEND_GUARDRAIL_SAMPLE':
       return {
@@ -708,6 +725,46 @@ export function useRollout() {
     dispatch({ type: 'CLEAR_GUARDRAIL_BREACHES' });
   };
 
+  const applyDrift = async (
+    scenarioId: string,
+    target: 'champion' | 'challenger',
+  ): Promise<{ applied: boolean; reason?: string }> => {
+    const scenario = findDriftScenario(scenarioId);
+    if (!scenario) return { applied: false, reason: 'unknown_scenario' };
+    const targetId =
+      target === 'champion' ? state.rollout.championId : state.rollout.challengerId;
+    if (!targetId) return { applied: false, reason: 'no_target_snapshot' };
+    const snap = state.rollout.snapshots.find((s) => s.id === targetId);
+    if (!snap) return { applied: false, reason: 'target_snapshot_missing' };
+    const { catalog, touched } = applyDriftToCatalog(scenario, snap.toolCatalog);
+    if (!touched) {
+      return { applied: false, reason: 'target_tool_not_in_catalog' };
+    }
+    const beforeHash = await hashToolDescriptions(snap.toolCatalog);
+    const afterHash = await hashToolDescriptions(catalog);
+    dispatch({
+      type: 'UPDATE_SNAPSHOT_TOOL_CATALOG',
+      payload: { snapshotId: snap.id, toolCatalog: catalog },
+    });
+    dispatch({
+      type: 'APPEND_ROLLOUT_AUDIT',
+      payload: createRolloutAuditEntry({
+        actor: { type: 'system', component: 'mcp_vendor' },
+        action: 'tool_description_drifted',
+        snapshotId: snap.id,
+        details: {
+          scenarioId: scenario.id,
+          scenarioLabel: scenario.label,
+          target,
+          targetTool: scenario.targetToolName,
+          beforeHash,
+          afterHash,
+        },
+      }),
+    });
+    return { applied: true };
+  };
+
   return {
     rollout: state.rollout,
     saveSnapshot,
@@ -722,5 +779,6 @@ export function useRollout() {
     appendSample,
     recordBreach,
     clearBreaches,
+    applyDrift,
   };
 }
