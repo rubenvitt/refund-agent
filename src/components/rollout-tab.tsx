@@ -22,6 +22,9 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Switch } from '@/components/ui/switch';
+import { Textarea } from '@/components/ui/textarea';
+import { Label } from '@/components/ui/label';
 import { useAppState, useRollout } from '@/lib/store';
 import { runShadow, type ShadowRunProgress } from '@/lib/shadow-runner';
 import { evalCases } from '@/lib/eval-cases';
@@ -392,6 +395,64 @@ function CanaryControl({
   );
 }
 
+function KillSwitchPanel({
+  active,
+  message,
+  onToggle,
+  onMessageChange,
+}: {
+  active: boolean;
+  message: string;
+  onToggle: (next: boolean) => void;
+  onMessageChange: (value: string) => void;
+}) {
+  return (
+    <Card className={active ? 'border-red-500/60 bg-red-500/5' : undefined}>
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center justify-between gap-2 text-base">
+          <span className="flex items-center gap-2">
+            <PowerOff
+              className={
+                active
+                  ? 'size-4 text-red-600 dark:text-red-400'
+                  : 'size-4 text-muted-foreground'
+              }
+            />
+            Kill Switch
+            {active && (
+              <Badge className="bg-red-500/10 text-red-600 dark:text-red-400">
+                ACTIVE
+              </Badge>
+            )}
+          </span>
+          <div className="flex items-center gap-2 text-xs font-normal text-muted-foreground">
+            <span>{active ? 'on' : 'off'}</span>
+            <Switch
+              checked={active}
+              onCheckedChange={onToggle}
+              aria-label="Toggle kill switch"
+            />
+          </div>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <p className="text-xs text-muted-foreground">
+          When active, new chat messages skip the agent entirely and return the
+          fallback below.
+        </p>
+        <div className="space-y-1.5">
+          <Label className="text-xs">Fallback message</Label>
+          <Textarea
+            value={message}
+            onChange={(e) => onMessageChange(e.target.value)}
+            className="min-h-[60px] font-mono text-xs"
+          />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function RolloutTab() {
   const {
     rollout,
@@ -401,6 +462,8 @@ export function RolloutTab() {
     recordShadowRun,
     clearShadowRuns,
     setCanaryPercent,
+    toggleKillSwitch,
+    setKillSwitchMessage,
   } = useRollout();
   const { state } = useAppState();
 
@@ -524,6 +587,13 @@ export function RolloutTab() {
         hasChampion={!!champion}
         hasChallenger={!!challenger}
         onChange={(pct) => setCanaryPercent(pct)}
+      />
+
+      <KillSwitchPanel
+        active={rollout.killSwitchActive}
+        message={rollout.killSwitchMessage}
+        onToggle={(next) => toggleKillSwitch(next)}
+        onMessageChange={setKillSwitchMessage}
       />
 
       <ShadowRunPanel

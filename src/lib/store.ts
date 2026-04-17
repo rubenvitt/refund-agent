@@ -120,6 +120,8 @@ export type AppAction =
   | { type: 'APPEND_SHADOW_RUN'; payload: ShadowRunResult }
   | { type: 'CLEAR_SHADOW_RUNS' }
   | { type: 'SET_CANARY_PERCENT'; payload: CanaryPercent }
+  | { type: 'SET_KILL_SWITCH'; payload: boolean }
+  | { type: 'SET_KILL_SWITCH_MESSAGE'; payload: string }
   | { type: 'RESET_ROLLOUT' };
 
 export function reducer(state: AppState, action: AppAction): AppState {
@@ -244,6 +246,16 @@ export function reducer(state: AppState, action: AppAction): AppState {
       return {
         ...state,
         rollout: { ...state.rollout, canaryPercent: action.payload },
+      };
+    case 'SET_KILL_SWITCH':
+      return {
+        ...state,
+        rollout: { ...state.rollout, killSwitchActive: action.payload },
+      };
+    case 'SET_KILL_SWITCH_MESSAGE':
+      return {
+        ...state,
+        rollout: { ...state.rollout, killSwitchMessage: action.payload },
       };
     case 'RESET_ROLLOUT':
       return { ...state, rollout: createEmptyRolloutState() };
@@ -420,6 +432,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       for (const run of [...history].reverse()) {
         dispatch({ type: 'APPEND_SHADOW_RUN', payload: run });
       }
+      if (typeof savedRollout.canaryPercent === 'number') {
+        dispatch({
+          type: 'SET_CANARY_PERCENT',
+          payload: savedRollout.canaryPercent,
+        });
+      }
+      if (typeof savedRollout.killSwitchActive === 'boolean') {
+        dispatch({
+          type: 'SET_KILL_SWITCH',
+          payload: savedRollout.killSwitchActive,
+        });
+      }
+      if (typeof savedRollout.killSwitchMessage === 'string') {
+        dispatch({
+          type: 'SET_KILL_SWITCH_MESSAGE',
+          payload: savedRollout.killSwitchMessage,
+        });
+      }
     }
     setHydrated(true);
   }, []);
@@ -592,6 +622,24 @@ export function useRollout() {
     });
   };
 
+  const toggleKillSwitch = (nextActive?: boolean) => {
+    const active = nextActive ?? !state.rollout.killSwitchActive;
+    dispatch({ type: 'SET_KILL_SWITCH', payload: active });
+    dispatch({
+      type: 'APPEND_ROLLOUT_AUDIT',
+      payload: createRolloutAuditEntry({
+        actor: { type: 'user' },
+        action: 'kill_switch_toggled',
+        snapshotId: null,
+        details: { active },
+      }),
+    });
+  };
+
+  const setKillSwitchMessage = (message: string) => {
+    dispatch({ type: 'SET_KILL_SWITCH_MESSAGE', payload: message });
+  };
+
   return {
     rollout: state.rollout,
     saveSnapshot,
@@ -601,5 +649,7 @@ export function useRollout() {
     recordShadowRun,
     clearShadowRuns,
     setCanaryPercent,
+    toggleKillSwitch,
+    setKillSwitchMessage,
   };
 }

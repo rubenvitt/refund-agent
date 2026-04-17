@@ -28,6 +28,19 @@ export function useChat() {
       setIsLoading(true);
 
       try {
+        if (state.rollout.killSwitchActive) {
+          const fallbackMsg: ChatMessage = {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: state.rollout.killSwitchMessage,
+            variant: null,
+            configSnapshotLabel: null,
+          };
+          dispatch({ type: 'ADD_CHAT_MESSAGE', payload: fallbackMsg });
+          setIsLoading(false);
+          return;
+        }
+
         const apiKey =
           state.settings.provider === 'openai'
             ? state.settings.openaiApiKey

@@ -434,12 +434,16 @@ export type RolloutAuditEntry = {
   details: Record<string, unknown>;
 };
 
+export const DEFAULT_KILL_SWITCH_MESSAGE =
+  'AI assistance is temporarily unavailable — a human agent will reach out.';
+
 export type RolloutState = {
   snapshots: ConfigSnapshot[];
   championId: string | null;
   challengerId: string | null;
   canaryPercent: CanaryPercent;
   killSwitchActive: boolean;
+  killSwitchMessage: string;
   auditLog: RolloutAuditEntry[];
   shadowRunHistory: ShadowRunResult[];
 };

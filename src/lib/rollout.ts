@@ -1,13 +1,14 @@
-import type {
-  AuditActor,
-  CanaryPercent,
-  ConfigSnapshot,
-  PromptConfig,
-  RolloutAuditAction,
-  RolloutAuditEntry,
-  RolloutState,
-  RolloutVariant,
-  ToolCatalog,
+import {
+  DEFAULT_KILL_SWITCH_MESSAGE,
+  type AuditActor,
+  type CanaryPercent,
+  type ConfigSnapshot,
+  type PromptConfig,
+  type RolloutAuditAction,
+  type RolloutAuditEntry,
+  type RolloutState,
+  type RolloutVariant,
+  type ToolCatalog,
 } from './types';
 import { generatePrefixedId } from './audit';
 
@@ -71,6 +72,7 @@ export function createEmptyRolloutState(): RolloutState {
     challengerId: null,
     canaryPercent: 0,
     killSwitchActive: false,
+    killSwitchMessage: DEFAULT_KILL_SWITCH_MESSAGE,
     auditLog: [],
     shadowRunHistory: [],
   };

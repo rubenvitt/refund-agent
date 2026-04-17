@@ -102,6 +102,8 @@ describe('createEmptyRolloutState', () => {
     expect(state.challengerId).toBeNull();
     expect(state.canaryPercent).toBe(0);
     expect(state.killSwitchActive).toBe(false);
+    expect(typeof state.killSwitchMessage).toBe('string');
+    expect(state.killSwitchMessage.length).toBeGreaterThan(0);
     expect(state.auditLog).toEqual([]);
     expect(state.shadowRunHistory).toEqual([]);
   });
