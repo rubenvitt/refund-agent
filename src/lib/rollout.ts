@@ -7,17 +7,7 @@ import type {
   RolloutState,
   ToolCatalog,
 } from './types';
-
-function randomHex(bytes: number): string {
-  return Array.from(crypto.getRandomValues(new Uint8Array(bytes)))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-function generateId(prefix: 'snp' | 'rla'): string {
-  const ts = Date.now().toString().padStart(13, '0');
-  return `${prefix}_${ts}${randomHex(4)}`;
-}
+import { generatePrefixedId } from './audit';
 
 export function createSnapshot(
   label: string,
@@ -26,7 +16,7 @@ export function createSnapshot(
   notes: string,
 ): ConfigSnapshot {
   return {
-    id: generateId('snp'),
+    id: generatePrefixedId('snp'),
     createdAt: new Date().toISOString(),
     label,
     promptConfig: structuredClone(promptConfig),
@@ -42,7 +32,7 @@ export function createRolloutAuditEntry(input: {
   details: Record<string, unknown>;
 }): RolloutAuditEntry {
   return {
-    id: generateId('rla'),
+    id: generatePrefixedId('rla'),
     timestamp: new Date().toISOString(),
     actor: input.actor,
     action: input.action,

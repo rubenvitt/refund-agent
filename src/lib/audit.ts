@@ -9,7 +9,7 @@ import type {
  * Generate a prefixed, timestamp-based, sortable ID.
  * Format: <prefix>_<13-digit-epoch-ms><8-random-hex-chars>
  */
-export function generatePrefixedId(prefix: 'req' | 'tc' | 'ae'): string {
+export function generatePrefixedId(prefix: 'req' | 'tc' | 'ae' | 'snp' | 'rla'): string {
   const timestamp = Date.now().toString().padStart(13, '0');
   const random = Array.from(crypto.getRandomValues(new Uint8Array(4)))
     .map((b) => b.toString(16).padStart(2, '0'))
