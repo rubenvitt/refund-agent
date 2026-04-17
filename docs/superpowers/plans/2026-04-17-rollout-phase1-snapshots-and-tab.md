@@ -10,6 +10,8 @@
 
 **Spec:** `docs/prd-rollout-discipline.md` — Phase 1 scope: F1 (Versionierte Configs), F8 (Rollout-Tab status header only), F9 (Rollout-Audit-Events).
 
+**Deliberate scope expansion beyond the PRD phasing:** The PRD's Phase 1 asks for an "empty Rollout tab with status header only". This plan additionally ships the snapshot list (with promote/delete controls) and the audit-log panel inside the Rollout tab. Reason: F1 is not exerciseable without promote UI, and F9's audit events are invisible without a panel — bundling them here produces the first screenshot from the acceptance criteria (Rollout-Tab-Übersicht) without a useless intermediate state. Phase 2 still owns Shadow + Integrity; Phase 3 still owns Canary + Guardrails + Kill-Switch activation.
+
 **Open questions from PRD:** All four (routing seed, shadow scope, approval for canary, cost transparency) are Phase 2/3 concerns and deliberately unresolved here.
 
 ---
@@ -494,11 +496,16 @@ Change 6 — persistence. Add a new storage key next to the existing ones and wi
 
 ```typescript
 const LS_KEY_ROLLOUT = 'support-agent-lab:rollout';
+const MAX_ROLLOUT_AUDIT_ENTRIES = 200;
 
 function saveRollout(rollout: RolloutState) {
   if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(LS_KEY_ROLLOUT, JSON.stringify(rollout));
+    const trimmed: RolloutState = {
+      ...rollout,
+      auditLog: rollout.auditLog.slice(-MAX_ROLLOUT_AUDIT_ENTRIES),
+    };
+    localStorage.setItem(LS_KEY_ROLLOUT, JSON.stringify(trimmed));
   } catch {
     // quota exceeded — silently ignore
   }
@@ -650,15 +657,14 @@ Context: Users already edit prompts and tools here; this is the natural place to
 
 - [ ] **Step 1: Add imports and hook at the top of `ContractsTab`**
 
-Add imports at the top of the file (merge with existing `lucide-react` and `./ui/*` imports where possible):
+Add imports at the top of the file (merge the `Camera` icon into the existing `lucide-react` import):
 
 ```typescript
 import { Camera } from 'lucide-react';
-import { Input } from '@/components/ui/input';
 import { useRollout } from '@/lib/store';
 ```
 
-If `@/components/ui/input` does not exist in the project, replace the `Input` import with a plain `<input>` using the same Tailwind classes used for other inputs in the file and remove the Input import entirely.
+The snapshot form uses plain `<input>` elements (not a UI `Input` wrapper) to keep parity with other bare inputs elsewhere in the file.
 
 - [ ] **Step 2: Inside `ContractsTab`, add local UI state and a handler**
 
