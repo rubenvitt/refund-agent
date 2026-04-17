@@ -388,3 +388,39 @@ export type ApprovalRequest = {
   arguments: Record<string, unknown>;
   message: string;
 };
+
+// ── Rollout ──
+
+export type ConfigSnapshot = {
+  id: string;
+  createdAt: string;
+  label: string;
+  promptConfig: PromptConfig;
+  toolCatalog: ToolCatalog;
+  notes: string;
+};
+
+export type RolloutAuditAction =
+  | 'snapshot_created'
+  | 'snapshot_deleted'
+  | 'champion_set'
+  | 'challenger_set'
+  | 'challenger_cleared';
+
+export type RolloutAuditEntry = {
+  id: string;
+  timestamp: string;
+  actor: AuditActor;
+  action: RolloutAuditAction;
+  snapshotId: string | null;
+  details: Record<string, unknown>;
+};
+
+export type RolloutState = {
+  snapshots: ConfigSnapshot[];
+  championId: string | null;
+  challengerId: string | null;
+  canaryPercent: 0 | 5 | 25 | 50 | 100;
+  killSwitchActive: boolean;
+  auditLog: RolloutAuditEntry[];
+};
