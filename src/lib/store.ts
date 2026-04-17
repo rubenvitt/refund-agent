@@ -17,6 +17,8 @@ import type {
 import { createSeedState } from './seed-data';
 import { createEmptyLedger } from './idempotency';
 import { defaultPromptConfig, defaultToolCatalog } from './default-prompts';
+import { createEmptyRolloutState, createRolloutAuditEntry, createSnapshot } from './rollout';
+import type { ConfigSnapshot, RolloutAuditEntry, RolloutState } from './types';
 
 // ── Chat Message ──
 
@@ -42,6 +44,7 @@ export type AppState = {
   chatMessages: ChatMessage[];
   toolCallLedger: ToolCallLedger;
   session: UserSession | null;
+  rollout: RolloutState;
 };
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -51,7 +54,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   anthropicApiKey: '',
 };
 
-function getInitialState(): AppState {
+export function getInitialState(): AppState {
   return {
     settings: DEFAULT_SETTINGS,
     demoState: createSeedState(),
@@ -66,6 +69,7 @@ function getInitialState(): AppState {
     chatMessages: [],
     toolCallLedger: createEmptyLedger(),
     session: null,
+    rollout: createEmptyRolloutState(),
   };
 }
 
@@ -94,9 +98,15 @@ export type AppAction =
   | { type: 'CLEAR_AUDIT_LOG' }
   | { type: 'UPDATE_LEDGER'; payload: ToolCallLedger }
   | { type: 'CLEAR_LEDGER' }
-  | { type: 'SET_SESSION'; payload: UserSession | null };
+  | { type: 'SET_SESSION'; payload: UserSession | null }
+  | { type: 'ADD_ROLLOUT_SNAPSHOT'; payload: ConfigSnapshot }
+  | { type: 'DELETE_ROLLOUT_SNAPSHOT'; payload: string }
+  | { type: 'SET_ROLLOUT_CHAMPION'; payload: string | null }
+  | { type: 'SET_ROLLOUT_CHALLENGER'; payload: string | null }
+  | { type: 'APPEND_ROLLOUT_AUDIT'; payload: RolloutAuditEntry }
+  | { type: 'RESET_ROLLOUT' };
 
-function reducer(state: AppState, action: AppAction): AppState {
+export function reducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
     case 'UPDATE_SETTINGS':
       return { ...state, settings: { ...state.settings, ...action.payload } };
@@ -166,6 +176,40 @@ function reducer(state: AppState, action: AppAction): AppState {
       return { ...state, toolCallLedger: createEmptyLedger() };
     case 'SET_SESSION':
       return { ...state, session: action.payload };
+    case 'ADD_ROLLOUT_SNAPSHOT':
+      return {
+        ...state,
+        rollout: {
+          ...state.rollout,
+          snapshots: [...state.rollout.snapshots, action.payload],
+        },
+      };
+    case 'DELETE_ROLLOUT_SNAPSHOT': {
+      const id = action.payload;
+      return {
+        ...state,
+        rollout: {
+          ...state.rollout,
+          snapshots: state.rollout.snapshots.filter((s) => s.id !== id),
+          championId: state.rollout.championId === id ? null : state.rollout.championId,
+          challengerId: state.rollout.challengerId === id ? null : state.rollout.challengerId,
+        },
+      };
+    }
+    case 'SET_ROLLOUT_CHAMPION':
+      return { ...state, rollout: { ...state.rollout, championId: action.payload } };
+    case 'SET_ROLLOUT_CHALLENGER':
+      return { ...state, rollout: { ...state.rollout, challengerId: action.payload } };
+    case 'APPEND_ROLLOUT_AUDIT':
+      return {
+        ...state,
+        rollout: {
+          ...state.rollout,
+          auditLog: [...state.rollout.auditLog, action.payload],
+        },
+      };
+    case 'RESET_ROLLOUT':
+      return { ...state, rollout: createEmptyRolloutState() };
     default:
       return state;
   }
@@ -185,7 +229,9 @@ const AppContext = createContext<AppContextValue | null>(null);
 const LS_KEY = 'support-agent-lab';
 const LS_KEY_AUDIT = 'support-agent-lab:audit';
 const LS_KEY_LEDGER = 'support-agent-lab:ledger';
+const LS_KEY_ROLLOUT = 'support-agent-lab:rollout';
 const MAX_AUDIT_ENTRIES = 200;
+const MAX_ROLLOUT_AUDIT_ENTRIES = 200;
 
 function loadFromLocalStorage(): Partial<AppState> | null {
   if (typeof window === 'undefined') return null;
@@ -257,6 +303,30 @@ function loadLedger(): ToolCallLedger | null {
   }
 }
 
+function saveRollout(rollout: RolloutState) {
+  if (typeof window === 'undefined') return;
+  try {
+    const trimmed: RolloutState = {
+      ...rollout,
+      auditLog: rollout.auditLog.slice(-MAX_ROLLOUT_AUDIT_ENTRIES),
+    };
+    localStorage.setItem(LS_KEY_ROLLOUT, JSON.stringify(trimmed));
+  } catch {
+    // quota exceeded — silently ignore
+  }
+}
+
+function loadRollout(): RolloutState | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(LS_KEY_ROLLOUT);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
 // ── Provider ──
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
@@ -287,6 +357,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (savedLedger) {
       dispatch({ type: 'UPDATE_LEDGER', payload: savedLedger });
     }
+    const savedRollout = loadRollout();
+    if (savedRollout) {
+      dispatch({ type: 'RESET_ROLLOUT' });
+      for (const snap of savedRollout.snapshots) {
+        dispatch({ type: 'ADD_ROLLOUT_SNAPSHOT', payload: snap });
+      }
+      if (savedRollout.championId) {
+        dispatch({ type: 'SET_ROLLOUT_CHAMPION', payload: savedRollout.championId });
+      }
+      if (savedRollout.challengerId) {
+        dispatch({ type: 'SET_ROLLOUT_CHALLENGER', payload: savedRollout.challengerId });
+      }
+      for (const entry of savedRollout.auditLog) {
+        dispatch({ type: 'APPEND_ROLLOUT_AUDIT', payload: entry });
+      }
+    }
     setHydrated(true);
   }, []);
 
@@ -305,6 +391,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!hydrated) return;
     saveLedger(state.toolCallLedger);
   }, [hydrated, state.toolCallLedger]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    saveRollout(state.rollout);
+  }, [hydrated, state.rollout]);
 
   return React.createElement(
     AppContext.Provider,
@@ -345,5 +436,71 @@ export function useSession() {
     session: state.session,
     setSession: (session: UserSession | null) =>
       dispatch({ type: 'SET_SESSION', payload: session }),
+  };
+}
+
+export function useRollout() {
+  const { state, dispatch } = useAppState();
+
+  const saveSnapshot = (label: string, notes: string) => {
+    const snap = createSnapshot(label, state.promptConfig, state.toolCatalog, notes);
+    dispatch({ type: 'ADD_ROLLOUT_SNAPSHOT', payload: snap });
+    dispatch({
+      type: 'APPEND_ROLLOUT_AUDIT',
+      payload: createRolloutAuditEntry({
+        actor: { type: 'user' },
+        action: 'snapshot_created',
+        snapshotId: snap.id,
+        details: { label, notes },
+      }),
+    });
+    return snap;
+  };
+
+  const setChampion = (snapshotId: string) => {
+    dispatch({ type: 'SET_ROLLOUT_CHAMPION', payload: snapshotId });
+    dispatch({
+      type: 'APPEND_ROLLOUT_AUDIT',
+      payload: createRolloutAuditEntry({
+        actor: { type: 'user' },
+        action: 'champion_set',
+        snapshotId,
+        details: {},
+      }),
+    });
+  };
+
+  const setChallenger = (snapshotId: string | null) => {
+    dispatch({ type: 'SET_ROLLOUT_CHALLENGER', payload: snapshotId });
+    dispatch({
+      type: 'APPEND_ROLLOUT_AUDIT',
+      payload: createRolloutAuditEntry({
+        actor: { type: 'user' },
+        action: snapshotId ? 'challenger_set' : 'challenger_cleared',
+        snapshotId,
+        details: {},
+      }),
+    });
+  };
+
+  const deleteSnapshot = (snapshotId: string) => {
+    dispatch({ type: 'DELETE_ROLLOUT_SNAPSHOT', payload: snapshotId });
+    dispatch({
+      type: 'APPEND_ROLLOUT_AUDIT',
+      payload: createRolloutAuditEntry({
+        actor: { type: 'user' },
+        action: 'snapshot_deleted',
+        snapshotId,
+        details: {},
+      }),
+    });
+  };
+
+  return {
+    rollout: state.rollout,
+    saveSnapshot,
+    setChampion,
+    setChallenger,
+    deleteSnapshot,
   };
 }
