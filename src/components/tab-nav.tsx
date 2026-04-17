@@ -7,6 +7,7 @@ import {
   ScrollText,
   FlaskConical,
   FileText,
+  Rocket,
   Database,
   Settings,
 } from 'lucide-react';
@@ -17,6 +18,7 @@ const TABS = [
   { href: '/trace', label: 'Trace', icon: ScrollText },
   { href: '/evals', label: 'Evals', icon: FlaskConical },
   { href: '/contracts', label: 'Contracts', icon: FileText },
+  { href: '/rollout', label: 'Rollout', icon: Rocket },
   { href: '/state', label: 'Backend State', icon: Database },
   { href: '/settings', label: 'Settings', icon: Settings },
 ] as const;
