@@ -267,4 +267,7 @@ Wenn diese Features stehen, liefert die Demo alle Screenshots und Videoclips fü
   - F1 Versionierte Configs — erledigt (Phase 1)
   - F8 Rollout-Tab (Status-Kopf, Snapshot-Liste, Audit-Panel) — erledigt (Phase 1)
   - F9 Rollout-Audit-Events — erledigt (Phase 1)
-- Phase 2–4 Features (F2 Shadow, F3 Canary, F4 Guardrails, F5 Kill-Switch-Controls, F6 Drift, F7 Integrity-Grader) — noch offen; jede Phase bekommt ihren eigenen Plan, sobald die vorige gemerged ist.
+- Phase 2 Plan: `docs/superpowers/plans/2026-04-17-rollout-phase2-shadow-and-integrity.md`
+  - F2 Shadow Runner — erledigt (Phase 2)
+  - F7 Tool-Description-Integrity-Grader — erledigt (Phase 2)
+- Phase 3–4 Features (F3 Canary, F4 Guardrails, F5 Kill-Switch-Controls, F6 Drift) — noch offen; jede Phase bekommt ihren eigenen Plan, sobald die vorige gemerged ist.
