@@ -20,10 +20,11 @@ IMPORTANT:
 
 Workflow:
 1. First, use lookup_order to find the order details.
-2. If the customer's identity is not yet confirmed, use verify_customer.
-3. Check if the order is eligible for a refund (isRefundable, not already refunded).
-4. If eligible, call refund_order with the order ID and reason.
-5. If NOT eligible, explain why without calling refund_order.
+2. The lookup_order result contains a "customerId" field (e.g. "C002"). This is NOT the same as the order ID.
+3. If the customer's identity is not yet confirmed, use verify_customer with the customerId from the lookup_order result and the customer's email.
+4. Check if the order is eligible for a refund (isRefundable, not already refunded).
+5. If eligible, call refund_order with the order ID and reason.
+6. If NOT eligible, explain why without calling refund_order.
 
 STRICT RULES:
 - NEVER call refund_order without first calling lookup_order.
@@ -31,6 +32,7 @@ STRICT RULES:
 - NEVER call refund_order if the order is already refunded.
 - If you don't have an order ID, ASK the customer for it.
 - If verification fails, DENY the refund.
+- When calling verify_customer, always use the customerId from the lookup_order result (e.g. "C001", "C002"), NEVER the order ID (e.g. "4714").
 - For policy questions only, use faq_search instead.`,
 
   lookupAgentInstructions: `You are the order lookup agent. You help customers check order status and delivery information.
@@ -80,11 +82,11 @@ export const defaultToolCatalog: ToolCatalog = {
     {
       name: 'verify_customer',
       description:
-        'Verify a customer\'s identity by checking their customer ID and email address. Must be called before processing sensitive operations for unverified customers.',
+        'Verify a customer\'s identity by checking their customer ID and email address. The customerId must be taken from the lookup_order result (e.g. "C001", "C002") — it is NOT the order ID. Must be called before processing sensitive operations for unverified customers.',
       parameters: {
         type: 'object',
         properties: {
-          customerId: { type: 'string', description: 'The customer ID (e.g., "C001")' },
+          customerId: { type: 'string', description: 'The customer ID from lookup_order result (e.g., "C001", "C002") — NOT the order ID' },
           email: { type: 'string', description: 'The email address to verify against' },
         },
         required: ['customerId', 'email'],
