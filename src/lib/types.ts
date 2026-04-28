@@ -203,7 +203,8 @@ export type TraceEntry = {
     | 'gate_allow'
     | 'gate_deny'
     | 'idempotency_block'
-    | 'auth_denial';
+    | 'auth_denial'
+    | 'model_result';
   agentId?: string;
   data: Record<string, unknown>;
 };

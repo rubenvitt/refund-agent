@@ -26,7 +26,9 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { useAppState } from '@/lib/store';
+import { OtelTraceView } from '@/components/otel-trace-view';
 import type { RunTrace, TraceEntry } from '@/lib/types';
 
 function entryConfig(type: TraceEntry['type']) {
@@ -128,6 +130,13 @@ function entryConfig(type: TraceEntry['type']) {
         color: 'text-orange-600 dark:text-orange-400',
         bg: 'bg-orange-500/10',
         label: 'Auth Denial',
+      };
+    case 'model_result':
+      return {
+        icon: Cpu,
+        color: 'text-violet-600 dark:text-violet-400',
+        bg: 'bg-violet-500/10',
+        label: 'Model Result',
       };
     default:
       return {
@@ -246,95 +255,108 @@ function TraceCard({ trace }: { trace: RunTrace }) {
 
       {expanded && (
         <CardContent>
-          <div className="relative space-y-0">
-            {/* Timeline line */}
-            <div className="absolute top-0 bottom-0 left-[11px] w-px bg-border" />
+          <Tabs defaultValue="timeline">
+            <TabsList variant="line" className="mb-3">
+              <TabsTrigger value="timeline">Timeline</TabsTrigger>
+              <TabsTrigger value="waterfall">OTel Waterfall</TabsTrigger>
+            </TabsList>
 
-            {trace.entries.map((entry, i) => {
-              const config = entryConfig(entry.type);
-              const Icon = config.icon;
-              return (
-                <div key={entry.id} className="relative flex gap-3 pb-3">
-                  <div
-                    className={`z-10 flex size-6 shrink-0 items-center justify-center rounded-full ${config.bg}`}
-                  >
-                    <Icon className={`size-3 ${config.color}`} />
-                  </div>
-                  <div className="flex-1 min-w-0 space-y-1">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={`text-xs font-medium ${config.color}`}
+            <TabsContent value="timeline">
+              <div className="relative space-y-0">
+                {/* Timeline line */}
+                <div className="absolute top-0 bottom-0 left-[11px] w-px bg-border" />
+
+                {trace.entries.map((entry, i) => {
+                  const config = entryConfig(entry.type);
+                  const Icon = config.icon;
+                  return (
+                    <div key={entry.id} className="relative flex gap-3 pb-3">
+                      <div
+                        className={`z-10 flex size-6 shrink-0 items-center justify-center rounded-full ${config.bg}`}
                       >
-                        {config.label}
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        {formatTime(entry.timestamp)}
-                      </span>
-                      {entry.agentId && (
-                        <Badge variant="outline" className="text-[10px]">
-                          {entry.agentId}
-                        </Badge>
-                      )}
-                    </div>
-                    {entry.type === 'gate_deny' ? (
-                      (() => {
-                        const d = entry.data as Record<string, unknown>;
-                        return (
-                          <div className="space-y-1 rounded bg-red-500/5 border border-red-500/20 p-1.5 text-xs">
-                            <div className="flex items-center gap-1.5">
-                              <Badge className="bg-red-500/10 text-red-600 dark:text-red-400 text-[10px]">
-                                {String(d.category)}
-                              </Badge>
-                              <span className="font-medium text-red-600 dark:text-red-400">
-                                {String(d.toolName)}
-                              </span>
-                            </div>
-                            <p className="text-red-600/80 dark:text-red-400/80">
-                              {String(d.reason)}
-                            </p>
-                            {d.technicalDetail ? (
-                              <pre className="mt-1 max-h-16 overflow-auto rounded bg-muted p-1 font-mono text-[10px] text-muted-foreground">
-                                {String(d.technicalDetail)}
-                              </pre>
-                            ) : null}
-                          </div>
-                        );
-                      })()
-                    ) : Object.keys(entry.data).length > 0 ? (
-                      <pre className="max-h-24 overflow-auto rounded bg-muted p-1.5 font-mono text-xs">
-                        {JSON.stringify(entry.data, null, 2)}
-                      </pre>
-                    ) : null}
-                    {entry.type === 'tool_call' && (() => {
-                      const tc = trace.toolCalls.find(
-                        (t) => t.id === (entry.data as Record<string, unknown>).toolCallId
-                      );
-                      return tc?.auditEntryId ? (
-                        <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
-                          <span className="font-mono text-[10px] bg-muted px-1 py-0.5 rounded">
-                            {tc.auditEntryId}
+                        <Icon className={`size-3 ${config.color}`} />
+                      </div>
+                      <div className="flex-1 min-w-0 space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`text-xs font-medium ${config.color}`}
+                          >
+                            {config.label}
                           </span>
-                          <span>Audit Record</span>
+                          <span className="text-xs text-muted-foreground">
+                            {formatTime(entry.timestamp)}
+                          </span>
+                          {entry.agentId && (
+                            <Badge variant="outline" className="text-[10px]">
+                              {entry.agentId}
+                            </Badge>
+                          )}
                         </div>
-                      ) : null;
-                    })()}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {trace.finalAnswer && (
-            <>
-              <Separator className="my-2" />
-              <div className="space-y-1">
-                <span className="text-xs font-medium text-muted-foreground">
-                  Final Answer
-                </span>
-                <p className="text-sm">{trace.finalAnswer}</p>
+                        {entry.type === 'gate_deny' ? (
+                          (() => {
+                            const d = entry.data as Record<string, unknown>;
+                            return (
+                              <div className="space-y-1 rounded bg-red-500/5 border border-red-500/20 p-1.5 text-xs">
+                                <div className="flex items-center gap-1.5">
+                                  <Badge className="bg-red-500/10 text-red-600 dark:text-red-400 text-[10px]">
+                                    {String(d.category)}
+                                  </Badge>
+                                  <span className="font-medium text-red-600 dark:text-red-400">
+                                    {String(d.toolName)}
+                                  </span>
+                                </div>
+                                <p className="text-red-600/80 dark:text-red-400/80">
+                                  {String(d.reason)}
+                                </p>
+                                {d.technicalDetail ? (
+                                  <pre className="mt-1 max-h-16 overflow-auto rounded bg-muted p-1 font-mono text-[10px] text-muted-foreground">
+                                    {String(d.technicalDetail)}
+                                  </pre>
+                                ) : null}
+                              </div>
+                            );
+                          })()
+                        ) : Object.keys(entry.data).length > 0 ? (
+                          <pre className="max-h-24 overflow-auto rounded bg-muted p-1.5 font-mono text-xs">
+                            {JSON.stringify(entry.data, null, 2)}
+                          </pre>
+                        ) : null}
+                        {entry.type === 'tool_call' && (() => {
+                          const tc = trace.toolCalls.find(
+                            (t) => t.id === (entry.data as Record<string, unknown>).toolCallId
+                          );
+                          return tc?.auditEntryId ? (
+                            <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                              <span className="font-mono text-[10px] bg-muted px-1 py-0.5 rounded">
+                                {tc.auditEntryId}
+                              </span>
+                              <span>Audit Record</span>
+                            </div>
+                          ) : null;
+                        })()}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            </>
-          )}
+
+              {trace.finalAnswer && (
+                <>
+                  <Separator className="my-2" />
+                  <div className="space-y-1">
+                    <span className="text-xs font-medium text-muted-foreground">
+                      Final Answer
+                    </span>
+                    <p className="text-sm">{trace.finalAnswer}</p>
+                  </div>
+                </>
+              )}
+            </TabsContent>
+
+            <TabsContent value="waterfall">
+              <OtelTraceView trace={trace} />
+            </TabsContent>
+          </Tabs>
         </CardContent>
       )}
     </Card>

@@ -362,10 +362,11 @@ export async function runWorkflow(
 
   routingMessages.push({ role: 'user', content: userMessage });
 
-  addTraceEntry(traceEntries, 'model_call', {
+  const routingCallEntry = addTraceEntry(traceEntries, 'model_call', {
     purpose: 'orchestrator_routing',
     model: settings.modelId,
   });
+  const routingStartMs = Date.now();
 
   try {
     const routingResult = await generateText({
@@ -382,6 +383,15 @@ export async function runWorkflow(
         }),
       },
       toolChoice: 'required' as const,
+    });
+
+    addTraceEntry(traceEntries, 'model_result', {
+      correlationId: routingCallEntry.id,
+      model: settings.modelId,
+      inputTokens: routingResult.totalUsage.inputTokens ?? 0,
+      outputTokens: routingResult.totalUsage.outputTokens ?? 0,
+      finishReason: routingResult.finishReason ?? 'stop',
+      durationMs: Date.now() - routingStartMs,
     });
 
     // Extract route from tool call
@@ -409,6 +419,14 @@ export async function runWorkflow(
       });
     }
   } catch (error) {
+    addTraceEntry(traceEntries, 'model_result', {
+      correlationId: routingCallEntry.id,
+      model: settings.modelId,
+      inputTokens: 0,
+      outputTokens: 0,
+      finishReason: 'error',
+      durationMs: Date.now() - routingStartMs,
+    });
     // If routing fails, default to clarify
     route = 'clarify';
     addTraceEntry(traceEntries, 'route_decision', {
@@ -424,10 +442,11 @@ export async function runWorkflow(
 
   if (route === 'clarify') {
     // No tool execution needed; just ask the LLM to produce a clarifying question
-    addTraceEntry(traceEntries, 'model_call', {
+    const clarifyCallEntry = addTraceEntry(traceEntries, 'model_call', {
       purpose: 'clarify_agent',
       model: settings.modelId,
     });
+    const clarifyStartMs = Date.now();
 
     try {
       const clarifyResult = await generateText({
@@ -442,8 +461,25 @@ export async function runWorkflow(
         ],
       });
 
+      addTraceEntry(traceEntries, 'model_result', {
+        correlationId: clarifyCallEntry.id,
+        model: settings.modelId,
+        inputTokens: clarifyResult.usage.inputTokens ?? 0,
+        outputTokens: clarifyResult.usage.outputTokens ?? 0,
+        finishReason: clarifyResult.finishReason ?? 'stop',
+        durationMs: Date.now() - clarifyStartMs,
+      });
+
       finalAnswer = clarifyResult.text;
     } catch (error) {
+      addTraceEntry(traceEntries, 'model_result', {
+        correlationId: clarifyCallEntry.id,
+        model: settings.modelId,
+        inputTokens: 0,
+        outputTokens: 0,
+        finishReason: 'error',
+        durationMs: Date.now() - clarifyStartMs,
+      });
       finalAnswer =
         'I apologize, but I encountered an error. Could you please rephrase your request?';
       addTraceEntry(traceEntries, 'agent_response', {
@@ -878,11 +914,12 @@ export async function runWorkflow(
       // checked when the tool calls execute
     }
 
-    addTraceEntry(traceEntries, 'model_call', {
+    const agentCallEntry = addTraceEntry(traceEntries, 'model_call', {
       purpose: `${route}_agent`,
       model: settings.modelId,
       tools: Object.keys(aiTools),
     });
+    const agentStartMs = Date.now();
 
     try {
       const agentResult = await generateText({
@@ -898,6 +935,15 @@ export async function runWorkflow(
         tools: aiTools,
         stopWhen: stepCountIs(5),
       });
+
+      addTraceEntry(traceEntries, 'model_result', {
+        correlationId: agentCallEntry.id,
+        model: settings.modelId,
+        inputTokens: agentResult.totalUsage.inputTokens ?? 0,
+        outputTokens: agentResult.totalUsage.outputTokens ?? 0,
+        finishReason: agentResult.finishReason ?? 'stop',
+        durationMs: Date.now() - agentStartMs,
+      }, route);
 
       finalAnswer = agentResult.text;
 
@@ -940,6 +986,14 @@ export async function runWorkflow(
           'I need your approval before proceeding with this action.';
       }
     } catch (error) {
+      addTraceEntry(traceEntries, 'model_result', {
+        correlationId: agentCallEntry.id,
+        model: settings.modelId,
+        inputTokens: 0,
+        outputTokens: 0,
+        finishReason: 'error',
+        durationMs: Date.now() - agentStartMs,
+      }, route);
       finalAnswer = `I encountered an error while processing your request: ${error instanceof Error ? error.message : String(error)}`;
       addTraceEntry(traceEntries, 'agent_response', {
         error: error instanceof Error ? error.message : String(error),
