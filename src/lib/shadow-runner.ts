@@ -34,6 +34,10 @@ function outcomeFromResult(result: WorkflowResult): ShadowRunVariantOutcome {
   return {
     route: result.trace.route,
     toolNames: result.trace.toolCalls.map((tc) => tc.toolName),
+    toolCalls: result.trace.toolCalls.map((tc) => ({
+      name: tc.toolName,
+      args: tc.arguments,
+    })),
     finalAnswer: result.finalAnswer,
     mismatchCount: result.trace.mismatches.length,
     error: null,
@@ -44,12 +48,17 @@ function outcomeFromError(error: unknown): ShadowRunVariantOutcome {
   return {
     route: null,
     toolNames: [],
+    toolCalls: [],
     finalAnswer: '',
     mismatchCount: 0,
     error: error instanceof Error ? error.message : String(error),
   };
 }
 
+// Final-answer text is non-deterministic across LLM calls — comparing it
+// verbatim flags every run as divergent and drowns out real behavioural
+// differences. We classify on route + tool sequence only; the raw answers
+// are still kept on the outcome so the UI can show them side-by-side.
 export function classifyDivergence(
   champion: ShadowRunVariantOutcome,
   challenger: ShadowRunVariantOutcome,
@@ -67,10 +76,6 @@ export function classifyDivergence(
     champion.toolNames.some((t, i) => t !== challenger.toolNames[i])
   ) {
     return 'tool_calls_differ';
-  }
-
-  if (champion.finalAnswer.trim() !== challenger.finalAnswer.trim()) {
-    return 'final_answer_differs';
   }
 
   return 'identical';

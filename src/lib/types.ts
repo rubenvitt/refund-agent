@@ -415,6 +415,7 @@ export type ToolDescriptionIntegrityCheck = {
 export type RolloutAuditAction =
   | 'snapshot_created'
   | 'snapshot_deleted'
+  | 'snapshot_loaded_to_live'
   | 'champion_set'
   | 'challenger_set'
   | 'challenger_cleared'
@@ -491,14 +492,19 @@ export type DivergenceKind =
   | 'identical'
   | 'route_differs'
   | 'tool_calls_differ'
-  | 'final_answer_differs'
   | 'both_failed'
   | 'champion_only_failed'
   | 'challenger_only_failed';
 
+export type ShadowToolCall = {
+  name: string;
+  args: Record<string, unknown>;
+};
+
 export type ShadowRunVariantOutcome = {
   route: RouteDecision | null;
   toolNames: string[];
+  toolCalls: ShadowToolCall[];
   finalAnswer: string;
   mismatchCount: number;
   error: string | null;

@@ -31,8 +31,53 @@ import type {
   GuardrailSample,
   RolloutAuditEntry,
   RolloutState,
+  ShadowRunCaseResult,
   ShadowRunResult,
+  ShadowRunVariantOutcome,
 } from './types';
+
+// Older persisted shadow runs (pre April 2026) classified non-deterministic
+// final-answer text differences as 'final_answer_differs'. We dropped that —
+// route + tool sequence is the real behavioural signal — so re-tag legacy
+// entries as identical and add the missing toolCalls field on hydration.
+function migrateVariantOutcome(
+  outcome: ShadowRunVariantOutcome & { toolCalls?: ShadowRunVariantOutcome['toolCalls'] },
+): ShadowRunVariantOutcome {
+  if (Array.isArray(outcome.toolCalls)) return outcome;
+  return {
+    ...outcome,
+    toolCalls: outcome.toolNames.map((name) => ({ name, args: {} })),
+  };
+}
+
+function migrateShadowRun(run: ShadowRunResult): ShadowRunResult {
+  const caseResults: ShadowRunCaseResult[] = run.caseResults.map((r) => ({
+    ...r,
+    champion: migrateVariantOutcome(r.champion),
+    challenger: migrateVariantOutcome(r.challenger),
+    divergence:
+      (r.divergence as string) === 'final_answer_differs'
+        ? 'identical'
+        : r.divergence,
+  }));
+  const totals = caseResults.reduce(
+    (acc, r) => {
+      if (r.divergence === 'identical') acc.identical += 1;
+      else if (
+        r.divergence === 'both_failed' ||
+        r.divergence === 'champion_only_failed' ||
+        r.divergence === 'challenger_only_failed'
+      ) {
+        acc.failed += 1;
+      } else {
+        acc.divergent += 1;
+      }
+      return acc;
+    },
+    { identical: 0, divergent: 0, failed: 0 },
+  );
+  return { ...run, caseResults, totals };
+}
 
 // ── Chat Message ──
 
@@ -499,7 +544,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       // correct newest-first order after hydration.
       const history = savedRollout.shadowRunHistory ?? [];
       for (const run of [...history].reverse()) {
-        dispatch({ type: 'APPEND_SHADOW_RUN', payload: run });
+        dispatch({ type: 'APPEND_SHADOW_RUN', payload: migrateShadowRun(run) });
       }
       if (typeof savedRollout.canaryPercent === 'number') {
         dispatch({
@@ -657,6 +702,32 @@ export function useRollout() {
     });
   };
 
+  // Reverse of saveSnapshot: copy the snapshot's frozen prompts/tools back
+  // into live state so the user can edit them in the Contracts tab and
+  // re-snapshot. Live edits never mutate the original snapshot — that
+  // immutability is what makes rollouts safe.
+  const loadSnapshotToLive = (snapshotId: string) => {
+    const snap = state.rollout.snapshots.find((s) => s.id === snapshotId);
+    if (!snap) return;
+    dispatch({
+      type: 'UPDATE_PROMPT_CONFIG',
+      payload: structuredClone(snap.promptConfig),
+    });
+    dispatch({
+      type: 'UPDATE_TOOL_CATALOG',
+      payload: structuredClone(snap.toolCatalog),
+    });
+    dispatch({
+      type: 'APPEND_ROLLOUT_AUDIT',
+      payload: createRolloutAuditEntry({
+        actor: { type: 'user' },
+        action: 'snapshot_loaded_to_live',
+        snapshotId,
+        details: { label: snap.label },
+      }),
+    });
+  };
+
   const recordShadowRun = (run: ShadowRunResult) => {
     dispatch({ type: 'APPEND_SHADOW_RUN', payload: run });
     dispatch({
@@ -788,6 +859,7 @@ export function useRollout() {
     setChampion,
     setChallenger,
     deleteSnapshot,
+    loadSnapshotToLive,
     recordShadowRun,
     clearShadowRuns,
     setCanaryPercent,

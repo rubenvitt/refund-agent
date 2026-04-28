@@ -113,6 +113,7 @@ function outcome(
   return {
     route: 'refund',
     toolNames: ['lookup_order'],
+    toolCalls: [{ name: 'lookup_order', args: {} }],
     finalAnswer: 'answer',
     mismatchCount: 0,
     error: null,
@@ -140,18 +141,11 @@ describe('classifyDivergence', () => {
     ).toBe('tool_calls_differ');
   });
 
-  it('detects final-answer differences when route and tools match', () => {
+  it('treats final-answer text differences as identical when route+tools match', () => {
+    // LLM final answers are non-deterministic; only behavioural differences
+    // (route, tool sequence) should count as divergence.
     expect(
       classifyDivergence(outcome(), outcome({ finalAnswer: 'different' })),
-    ).toBe('final_answer_differs');
-  });
-
-  it('ignores whitespace differences in final answers', () => {
-    expect(
-      classifyDivergence(
-        outcome({ finalAnswer: 'answer' }),
-        outcome({ finalAnswer: '  answer  ' }),
-      ),
     ).toBe('identical');
   });
 
@@ -185,8 +179,9 @@ describe('runShadow', () => {
     const calls: Array<{ message: string; promptConfigId: string }> = [];
 
     // Fake runWorkflow — champion returns 'answer' for all; challenger
-    // returns different answer on c1 (final_answer_differs), uses an extra
-    // tool on c2 (tool_calls_differ), and matches on c3 (identical).
+    // returns different wording on c1 (still identical — text doesn't
+    // count), uses an extra tool on c2 (tool_calls_differ), and matches
+    // on c3 (identical).
     let callIndex = 0;
     const runWorkflow = async (input: {
       promptConfig: PromptConfig;
@@ -220,11 +215,11 @@ describe('runShadow', () => {
     expect(result.championId).toBe(champion.id);
     expect(result.challengerId).toBe(challenger.id);
     expect(result.caseResults.map((r) => r.divergence)).toEqual([
-      'final_answer_differs',
+      'identical',
       'tool_calls_differ',
       'identical',
     ]);
-    expect(result.totals).toEqual({ identical: 1, divergent: 2, failed: 0 });
+    expect(result.totals).toEqual({ identical: 2, divergent: 1, failed: 0 });
     expect(result.id.startsWith('shr_')).toBe(true);
   });
 

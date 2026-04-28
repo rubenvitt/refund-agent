@@ -17,6 +17,9 @@ import {
   CircleDashed,
   Loader2,
   Zap,
+  ChevronRight,
+  Pencil,
+  RotateCcw,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -38,10 +41,13 @@ import { DRIFT_SCENARIOS } from '@/lib/drift-scenarios';
 import type {
   ConfigSnapshot,
   DivergenceKind,
+  EvalCategory,
   GuardrailBreach,
   GuardrailMetricId,
   RolloutAuditEntry,
+  ShadowRunCaseResult,
   ShadowRunResult,
+  ShadowRunVariantOutcome,
   ToolDescriptionIntegrityCheck,
 } from '@/lib/types';
 
@@ -140,7 +146,6 @@ const DIVERGENCE_LABEL: Record<DivergenceKind, string> = {
   identical: 'identical',
   route_differs: 'route differs',
   tool_calls_differ: 'tool calls differ',
-  final_answer_differs: 'final answer differs',
   both_failed: 'both failed',
   champion_only_failed: 'champion failed',
   challenger_only_failed: 'challenger failed',
@@ -171,6 +176,154 @@ function DivergenceBadge({ kind }: { kind: DivergenceKind }) {
   );
 }
 
+function VariantSummary({ outcome }: { outcome: ShadowRunVariantOutcome }) {
+  if (outcome.error) {
+    return (
+      <span className="font-mono text-red-600 dark:text-red-400">
+        error: {outcome.error}
+      </span>
+    );
+  }
+  return (
+    <span className="font-mono">
+      {outcome.route ?? '—'} ·{' '}
+      {outcome.toolNames.length > 0 ? outcome.toolNames.join(', ') : '∅'}
+      {outcome.mismatchCount > 0 && (
+        <>
+          {' · '}
+          <span className="text-amber-600 dark:text-amber-400">
+            {outcome.mismatchCount} mismatch
+            {outcome.mismatchCount === 1 ? '' : 'es'}
+          </span>
+        </>
+      )}
+    </span>
+  );
+}
+
+function VariantDetail({
+  label,
+  outcome,
+}: {
+  label: string;
+  outcome: ShadowRunVariantOutcome;
+}) {
+  return (
+    <div className="space-y-1.5 rounded border bg-muted/20 p-2">
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
+      {outcome.error ? (
+        <div className="font-mono text-[11px] text-red-600 dark:text-red-400">
+          {outcome.error}
+        </div>
+      ) : (
+        <>
+          <div className="text-[11px]">
+            <span className="text-muted-foreground">route:</span>{' '}
+            <span className="font-mono">{outcome.route ?? '—'}</span>
+            {outcome.mismatchCount > 0 && (
+              <>
+                {'  ·  '}
+                <span className="text-amber-600 dark:text-amber-400">
+                  {outcome.mismatchCount} mismatch
+                  {outcome.mismatchCount === 1 ? '' : 'es'}
+                </span>
+              </>
+            )}
+          </div>
+          {outcome.toolCalls.length > 0 ? (
+            <div className="space-y-0.5">
+              <div className="text-[10px] text-muted-foreground">
+                tool calls
+              </div>
+              <ol className="space-y-1 pl-3">
+                {outcome.toolCalls.map((tc, i) => (
+                  <li key={i} className="font-mono text-[11px]">
+                    <span className="text-muted-foreground">{i + 1}.</span>{' '}
+                    {tc.name}
+                    {Object.keys(tc.args).length > 0 && (
+                      <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap break-all rounded bg-background/60 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                        {JSON.stringify(tc.args, null, 2)}
+                      </pre>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          ) : (
+            <div className="text-[11px] text-muted-foreground">no tools</div>
+          )}
+          <div className="space-y-0.5">
+            <div className="text-[10px] text-muted-foreground">
+              final answer
+            </div>
+            <div className="whitespace-pre-wrap rounded bg-background/60 px-1.5 py-1 text-[11px]">
+              {outcome.finalAnswer || (
+                <span className="text-muted-foreground">∅</span>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function CaseRow({ result }: { result: ShadowRunCaseResult }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="rounded-md border text-xs">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center gap-2 px-2 py-1.5 text-left hover:bg-muted/40"
+      >
+        <ChevronRight
+          className={`size-3 shrink-0 text-muted-foreground transition-transform ${
+            expanded ? 'rotate-90' : ''
+          }`}
+        />
+        <DivergenceBadge kind={result.divergence} />
+        <span className="font-mono">{result.caseId}</span>
+        <span className="flex-1 truncate text-muted-foreground">
+          {result.userMessage}
+        </span>
+      </button>
+      {!expanded && result.divergence !== 'identical' && (
+        <div className="grid grid-cols-2 gap-2 border-t px-2 py-1.5 text-[11px]">
+          <div>
+            <span className="text-muted-foreground">champion: </span>
+            <VariantSummary outcome={result.champion} />
+          </div>
+          <div>
+            <span className="text-muted-foreground">challenger: </span>
+            <VariantSummary outcome={result.challenger} />
+          </div>
+        </div>
+      )}
+      {expanded && (
+        <div className="grid grid-cols-1 gap-2 border-t p-2 lg:grid-cols-2">
+          <VariantDetail label="champion" outcome={result.champion} />
+          <VariantDetail label="challenger" outcome={result.challenger} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+const ALL_EVAL_CATEGORIES: EvalCategory[] = [
+  'positive_refund',
+  'negative_refund',
+  'lookup',
+  'ambiguity',
+  'policy_boundary',
+  'auth_bola',
+  'auth_bfla',
+  'idempotency',
+  'policy_gate',
+];
+
 function ShadowRunPanel({
   champion,
   challenger,
@@ -179,7 +332,12 @@ function ShadowRunPanel({
   isRunning,
   progress,
   liveRun,
+  selectedCategories,
+  onToggleCategory,
+  filteredCount,
+  divergentCount,
   onStart,
+  onRerunDivergent,
   onClear,
 }: {
   champion: ConfigSnapshot | null;
@@ -189,19 +347,32 @@ function ShadowRunPanel({
   isRunning: boolean;
   progress: ShadowRunProgress | null;
   liveRun: ShadowRunResult | null;
+  selectedCategories: Set<EvalCategory>;
+  onToggleCategory: (cat: EvalCategory) => void;
+  filteredCount: number;
+  divergentCount: number;
   onStart: () => void;
+  onRerunDivergent: () => void;
   onClear: () => void;
 }) {
-  const disabled = !champion || !challenger || isRunning;
-  const disabledReason =
-    !champion || !challenger
-      ? 'Set both Champion and Challenger to start.'
+  const noPair = !champion || !challenger;
+  const disabled = noPair || isRunning || filteredCount === 0;
+  const disabledReason = noPair
+    ? 'Set both Champion and Challenger to start.'
+    : filteredCount === 0
+      ? 'Pick at least one category.'
       : null;
   const displayRun = liveRun ?? lastRun;
   const pct =
     progress && progress.totalCases > 0
       ? Math.round((progress.completedCases / progress.totalCases) * 100)
       : 0;
+  const countByCategory = ALL_EVAL_CATEGORIES.reduce<
+    Record<EvalCategory, number>
+  >((acc, cat) => {
+    acc[cat] = evalCases.filter((c) => c.category === cat).length;
+    return acc;
+  }, {} as Record<EvalCategory, number>);
 
   return (
     <Card>
@@ -215,6 +386,28 @@ function ShadowRunPanel({
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {ALL_EVAL_CATEGORIES.map((cat) => {
+            const active = selectedCategories.has(cat);
+            const count = countByCategory[cat];
+            return (
+              <button
+                key={cat}
+                type="button"
+                onClick={() => onToggleCategory(cat)}
+                disabled={isRunning}
+                className={`rounded-full border px-2 py-0.5 text-[11px] transition disabled:opacity-50 ${
+                  active
+                    ? 'border-primary/40 bg-primary/10 text-primary'
+                    : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted'
+                }`}
+              >
+                {cat} · {count}
+              </button>
+            );
+          })}
+        </div>
+
         <div className="flex flex-wrap items-center gap-2">
           <Button size="sm" onClick={onStart} disabled={disabled}>
             {isRunning ? (
@@ -222,7 +415,21 @@ function ShadowRunPanel({
             ) : (
               <Play className="size-3.5" />
             )}
-            {isRunning ? 'Running…' : `Start (${evalCases.length} cases)`}
+            {isRunning ? 'Running…' : `Start (${filteredCount} cases)`}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onRerunDivergent}
+            disabled={noPair || isRunning || divergentCount === 0}
+            title={
+              divergentCount === 0
+                ? 'No divergent or failed cases in the last run.'
+                : 'Re-run only the cases that diverged or failed last time.'
+            }
+          >
+            <RotateCcw className="size-3.5" />
+            Re-run divergent ({divergentCount})
           </Button>
           {(lastRun || historyCount > 0) && (
             <Button size="sm" variant="ghost" onClick={onClear}>
@@ -273,48 +480,11 @@ function ShadowRunPanel({
                 {displayRun.id} · {isRunning ? 'in progress' : new Date(displayRun.completedAt).toLocaleString()}
               </span>
             </div>
-            <ScrollArea className="max-h-72">
-              <div className="space-y-1">
-                {displayRun.caseResults.map((r) => (
-                  <div
-                    key={r.caseId}
-                    className="rounded-md border px-2 py-1.5 text-xs"
-                  >
-                    <div className="flex items-center gap-2">
-                      <DivergenceBadge kind={r.divergence} />
-                      <span className="font-mono">{r.caseId}</span>
-                      <span className="flex-1 truncate text-muted-foreground">
-                        {r.userMessage}
-                      </span>
-                    </div>
-                    {r.divergence !== 'identical' && (
-                      <div className="mt-1 grid grid-cols-2 gap-2 text-[11px]">
-                        <div>
-                          <span className="text-muted-foreground">
-                            champion:{' '}
-                          </span>
-                          <span className="font-mono">
-                            {r.champion.error
-                              ? `error: ${r.champion.error}`
-                              : `${r.champion.route ?? '—'} · ${r.champion.toolNames.join(', ') || '∅'}`}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground">
-                            challenger:{' '}
-                          </span>
-                          <span className="font-mono">
-                            {r.challenger.error
-                              ? `error: ${r.challenger.error}`
-                              : `${r.challenger.route ?? '—'} · ${r.challenger.toolNames.join(', ') || '∅'}`}
-                          </span>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </ScrollArea>
+            <div className="max-h-96 space-y-1 overflow-y-auto rounded-md border bg-muted/10 p-1">
+              {displayRun.caseResults.map((r) => (
+                <CaseRow key={r.caseId} result={r} />
+              ))}
+            </div>
           </div>
         ) : (
           <div className="rounded-md border border-dashed px-4 py-6 text-center text-xs text-muted-foreground">
@@ -766,6 +936,7 @@ export function RolloutTab() {
     setChampion,
     setChallenger,
     deleteSnapshot,
+    loadSnapshotToLive,
     recordShadowRun,
     clearShadowRuns,
     setCanaryPercent,
@@ -793,6 +964,18 @@ export function RolloutTab() {
   const [liveShadowRun, setLiveShadowRun] = useState<ShadowRunResult | null>(
     null,
   );
+  const [selectedCategories, setSelectedCategories] = useState<Set<EvalCategory>>(
+    () => new Set(evalCases.map((c) => c.category)),
+  );
+
+  const toggleCategory = (cat: EvalCategory) => {
+    setSelectedCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(cat)) next.delete(cat);
+      else next.add(cat);
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (!champion) {
@@ -816,17 +999,29 @@ export function RolloutTab() {
     };
   }, [champion]);
 
-  const handleStartShadow = async () => {
-    if (!champion || !challenger) return;
+  const filteredCases = evalCases.filter((c) =>
+    selectedCategories.has(c.category),
+  );
+
+  const divergentCaseIds = lastShadowRun
+    ? lastShadowRun.caseResults
+        .filter((r) => r.divergence !== 'identical')
+        .map((r) => r.caseId)
+    : [];
+  const divergentCases = evalCases.filter((c) =>
+    divergentCaseIds.includes(c.id),
+  );
+
+  const runShadowOver = async (cases: typeof evalCases) => {
+    if (!champion || !challenger || cases.length === 0) return;
     setShadowError(null);
     setIsRunningShadow(true);
     setShadowProgress({
       completedCases: 0,
-      totalCases: evalCases.length,
-      currentCaseId: evalCases[0]?.id ?? '',
+      totalCases: cases.length,
+      currentCaseId: cases[0]?.id ?? '',
       currentVariant: 'champion',
     });
-    // Seed a live run scaffold so the matrix card has an anchor to update
     const runStartedAt = new Date().toISOString();
     setLiveShadowRun({
       id: 'shr_pending',
@@ -841,7 +1036,7 @@ export function RolloutTab() {
       const result = await runShadow({
         champion,
         challenger,
-        cases: evalCases,
+        cases,
         settings: state.settings,
         onProgress: setShadowProgress,
         onCaseComplete: (caseResult) => {
@@ -877,6 +1072,9 @@ export function RolloutTab() {
       setShadowProgress(null);
     }
   };
+
+  const handleStartShadow = () => runShadowOver(filteredCases);
+  const handleRerunDivergent = () => runShadowOver(divergentCases);
 
   return (
     <div className="flex flex-col gap-4">
@@ -952,7 +1150,12 @@ export function RolloutTab() {
         isRunning={isRunningShadow}
         progress={shadowProgress}
         liveRun={liveShadowRun}
+        selectedCategories={selectedCategories}
+        onToggleCategory={toggleCategory}
+        filteredCount={filteredCases.length}
+        divergentCount={divergentCases.length}
         onStart={handleStartShadow}
+        onRerunDivergent={handleRerunDivergent}
         onClear={() => {
           clearShadowRuns();
           setLiveShadowRun(null);
@@ -1029,6 +1232,15 @@ export function RolloutTab() {
                         >
                           <Swords className="size-3" />
                           {isChallenger ? 'Clear' : 'Challenger'}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => loadSnapshotToLive(snap.id)}
+                          title="Load into live state to edit, then save as a new snapshot"
+                        >
+                          <Pencil className="size-3" />
+                          Edit
                         </Button>
                         <Button
                           variant="ghost"
