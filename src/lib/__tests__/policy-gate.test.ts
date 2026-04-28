@@ -90,7 +90,7 @@ describe('Check 1: Tool Allowlist', () => {
 
   it('denies reset_password on the refund route', () => {
     const result = evaluatePolicyGate(
-      makeCtx({ route: 'refund', toolName: 'reset_password', args: { email: 'max@example.com' } })
+      makeCtx({ route: 'refund', toolName: 'reset_password', args: { email: 'max.mustermann@example.com' } })
     );
     expect(result.decision).toBe('deny');
     if (result.decision === 'deny') {
@@ -245,7 +245,7 @@ describe('Check 3: Domain Invariants — reset_password', () => {
       makeCtx({
         route: 'account',
         toolName: 'reset_password',
-        args: { email: 'max@example.com' },
+        args: { email: 'max.mustermann@example.com' },
       })
     );
     // reset_password is not requiresApproval in the catalog, so should be allow

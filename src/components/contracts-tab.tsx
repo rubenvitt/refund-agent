@@ -10,6 +10,7 @@ import {
   ShieldAlert,
   AlertTriangle,
   Info,
+  Camera,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -19,7 +20,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { useAppState } from '@/lib/store';
+import { useAppState, useRollout } from '@/lib/store';
 import { defaultPromptConfig, defaultToolCatalog } from '@/lib/default-prompts';
 import type { ToolDefinition } from '@/lib/types';
 
@@ -172,20 +173,58 @@ export function ContractsTab() {
     dispatch({ type: 'RESET_TOOL_CATALOG' });
   };
 
+  const { saveSnapshot } = useRollout();
+  const [snapshotLabel, setSnapshotLabel] = useState('');
+  const [snapshotNotes, setSnapshotNotes] = useState('');
+  const [snapshotSaved, setSnapshotSaved] = useState<string | null>(null);
+
+  const handleSaveSnapshot = async () => {
+    const label = snapshotLabel.trim() || `Snapshot ${new Date().toISOString()}`;
+    const snap = await saveSnapshot(label, snapshotNotes.trim());
+    setSnapshotLabel('');
+    setSnapshotNotes('');
+    setSnapshotSaved(snap.label);
+    setTimeout(() => setSnapshotSaved(null), 3000);
+  };
+
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-center gap-2">
           <FileText className="size-5 text-muted-foreground" />
-          <h2 className="text-lg font-semibold">
-            Contracts & Prompts
-          </h2>
+          <h2 className="text-lg font-semibold">Contracts & Prompts</h2>
         </div>
-        <Button variant="outline" size="sm" onClick={resetAll}>
-          <RotateCcw className="size-3.5" />
-          Reset All to Baseline
-        </Button>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <input
+            type="text"
+            placeholder="Snapshot label (optional)"
+            value={snapshotLabel}
+            onChange={(e) => setSnapshotLabel(e.target.value)}
+            className="h-8 rounded-md border bg-transparent px-2 text-xs"
+          />
+          <input
+            type="text"
+            placeholder="Notes (optional)"
+            value={snapshotNotes}
+            onChange={(e) => setSnapshotNotes(e.target.value)}
+            className="h-8 rounded-md border bg-transparent px-2 text-xs"
+          />
+          <Button variant="outline" size="sm" onClick={handleSaveSnapshot}>
+            <Camera className="size-3.5" />
+            Save Snapshot
+          </Button>
+          <Button variant="outline" size="sm" onClick={resetAll}>
+            <RotateCcw className="size-3.5" />
+            Reset All
+          </Button>
+        </div>
       </div>
+      {snapshotSaved && (
+        <div className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-400">
+          Saved snapshot: <span className="font-medium">{snapshotSaved}</span>{' '}
+          — manage it in the Rollout tab.
+        </div>
+      )}
 
       <div>
         <div className="space-y-6 pb-4">

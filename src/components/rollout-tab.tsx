@@ -1,0 +1,1313 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import {
+  Rocket,
+  ShieldCheck,
+  Crown,
+  Swords,
+  Trash2,
+  Gauge,
+  PowerOff,
+  History,
+  Play,
+  AlertTriangle,
+  CircleCheck,
+  CircleX,
+  CircleDashed,
+  Loader2,
+  Zap,
+  ChevronRight,
+  Pencil,
+  RotateCcw,
+} from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Separator } from '@/components/ui/separator';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Switch } from '@/components/ui/switch';
+import { Textarea } from '@/components/ui/textarea';
+import { Label } from '@/components/ui/label';
+import { useAppState, useRollout } from '@/lib/store';
+import { runShadow, type ShadowRunProgress } from '@/lib/shadow-runner';
+import { evalCases } from '@/lib/eval-cases';
+import { checkToolDescriptionIntegrity } from '@/lib/graders/tool-description-pin';
+import {
+  championBaseline,
+  evaluateMetric,
+} from '@/lib/rollout-guardrails';
+import { DRIFT_SCENARIOS } from '@/lib/drift-scenarios';
+import type {
+  ConfigSnapshot,
+  DivergenceKind,
+  EvalCategory,
+  GuardrailBreach,
+  GuardrailMetricId,
+  RolloutAuditEntry,
+  ShadowRunCaseResult,
+  ShadowRunResult,
+  ShadowRunVariantOutcome,
+  ToolDescriptionIntegrityCheck,
+} from '@/lib/types';
+
+function snapshotDisplayId(id: string): string {
+  return id.slice(0, 10);
+}
+
+function formatActor(entry: RolloutAuditEntry): string {
+  switch (entry.actor.type) {
+    case 'user':
+      return 'user';
+    case 'agent':
+      return `agent:${entry.actor.agentId}`;
+    case 'system':
+      return `system:${entry.actor.component}`;
+  }
+}
+
+function StatusHeader({
+  champion,
+  challenger,
+  canaryPercent,
+  killSwitchActive,
+}: {
+  champion: ConfigSnapshot | null;
+  challenger: ConfigSnapshot | null;
+  canaryPercent: number;
+  killSwitchActive: boolean;
+}) {
+  return (
+    <Card>
+      <CardContent className="grid grid-cols-1 gap-3 py-4 sm:grid-cols-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Crown className="size-3" /> Champion
+          </div>
+          <div className="text-sm font-medium">
+            {champion ? (
+              champion.label
+            ) : (
+              <span className="text-muted-foreground">none</span>
+            )}
+          </div>
+          {champion && (
+            <div className="font-mono text-[10px] text-muted-foreground">
+              {snapshotDisplayId(champion.id)}
+            </div>
+          )}
+        </div>
+        <div className="space-y-1">
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Swords className="size-3" /> Challenger
+          </div>
+          <div className="text-sm font-medium">
+            {challenger ? (
+              challenger.label
+            ) : (
+              <span className="text-muted-foreground">none</span>
+            )}
+          </div>
+          {challenger && (
+            <div className="font-mono text-[10px] text-muted-foreground">
+              {snapshotDisplayId(challenger.id)}
+            </div>
+          )}
+        </div>
+        <div className="space-y-1">
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Gauge className="size-3" /> Canary
+          </div>
+          <div className="text-sm font-medium">{canaryPercent}%</div>
+          <div className="text-[10px] text-muted-foreground">
+            routing controls arrive in Phase 3
+          </div>
+        </div>
+        <div className="space-y-1">
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <PowerOff className="size-3" /> Kill Switch
+          </div>
+          <Badge
+            className={
+              killSwitchActive
+                ? 'bg-red-500/10 text-red-600 dark:text-red-400'
+                : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+            }
+          >
+            {killSwitchActive ? 'ACTIVE' : 'off'}
+          </Badge>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+const DIVERGENCE_LABEL: Record<DivergenceKind, string> = {
+  identical: 'identical',
+  route_differs: 'route differs',
+  tool_calls_differ: 'tool calls differ',
+  both_failed: 'both failed',
+  champion_only_failed: 'champion failed',
+  challenger_only_failed: 'challenger failed',
+};
+
+function DivergenceBadge({ kind }: { kind: DivergenceKind }) {
+  if (kind === 'identical') {
+    return (
+      <Badge className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+        <CircleCheck className="size-3" />
+        identical
+      </Badge>
+    );
+  }
+  if (kind === 'both_failed' || kind.endsWith('_only_failed')) {
+    return (
+      <Badge className="bg-red-500/10 text-red-600 dark:text-red-400">
+        <CircleX className="size-3" />
+        {DIVERGENCE_LABEL[kind]}
+      </Badge>
+    );
+  }
+  return (
+    <Badge className="bg-amber-500/10 text-amber-600 dark:text-amber-400">
+      <CircleDashed className="size-3" />
+      {DIVERGENCE_LABEL[kind]}
+    </Badge>
+  );
+}
+
+function VariantSummary({ outcome }: { outcome: ShadowRunVariantOutcome }) {
+  if (outcome.error) {
+    return (
+      <span className="font-mono text-red-600 dark:text-red-400">
+        error: {outcome.error}
+      </span>
+    );
+  }
+  return (
+    <span className="font-mono">
+      {outcome.route ?? '—'} ·{' '}
+      {outcome.toolNames.length > 0 ? outcome.toolNames.join(', ') : '∅'}
+      {outcome.mismatchCount > 0 && (
+        <>
+          {' · '}
+          <span className="text-amber-600 dark:text-amber-400">
+            {outcome.mismatchCount} mismatch
+            {outcome.mismatchCount === 1 ? '' : 'es'}
+          </span>
+        </>
+      )}
+    </span>
+  );
+}
+
+function VariantDetail({
+  label,
+  outcome,
+}: {
+  label: string;
+  outcome: ShadowRunVariantOutcome;
+}) {
+  return (
+    <div className="space-y-1.5 rounded border bg-muted/20 p-2">
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
+      {outcome.error ? (
+        <div className="font-mono text-[11px] text-red-600 dark:text-red-400">
+          {outcome.error}
+        </div>
+      ) : (
+        <>
+          <div className="text-[11px]">
+            <span className="text-muted-foreground">route:</span>{' '}
+            <span className="font-mono">{outcome.route ?? '—'}</span>
+            {outcome.mismatchCount > 0 && (
+              <>
+                {'  ·  '}
+                <span className="text-amber-600 dark:text-amber-400">
+                  {outcome.mismatchCount} mismatch
+                  {outcome.mismatchCount === 1 ? '' : 'es'}
+                </span>
+              </>
+            )}
+          </div>
+          {outcome.toolCalls.length > 0 ? (
+            <div className="space-y-0.5">
+              <div className="text-[10px] text-muted-foreground">
+                tool calls
+              </div>
+              <ol className="space-y-1 pl-3">
+                {outcome.toolCalls.map((tc, i) => (
+                  <li key={i} className="font-mono text-[11px]">
+                    <span className="text-muted-foreground">{i + 1}.</span>{' '}
+                    {tc.name}
+                    {Object.keys(tc.args).length > 0 && (
+                      <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap break-all rounded bg-background/60 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                        {JSON.stringify(tc.args, null, 2)}
+                      </pre>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          ) : (
+            <div className="text-[11px] text-muted-foreground">no tools</div>
+          )}
+          <div className="space-y-0.5">
+            <div className="text-[10px] text-muted-foreground">
+              final answer
+            </div>
+            <div className="whitespace-pre-wrap rounded bg-background/60 px-1.5 py-1 text-[11px]">
+              {outcome.finalAnswer || (
+                <span className="text-muted-foreground">∅</span>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function CaseRow({ result }: { result: ShadowRunCaseResult }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="rounded-md border text-xs">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center gap-2 px-2 py-1.5 text-left hover:bg-muted/40"
+      >
+        <ChevronRight
+          className={`size-3 shrink-0 text-muted-foreground transition-transform ${
+            expanded ? 'rotate-90' : ''
+          }`}
+        />
+        <DivergenceBadge kind={result.divergence} />
+        <span className="font-mono">{result.caseId}</span>
+        <span className="flex-1 truncate text-muted-foreground">
+          {result.userMessage}
+        </span>
+      </button>
+      {!expanded && result.divergence !== 'identical' && (
+        <div className="grid grid-cols-2 gap-2 border-t px-2 py-1.5 text-[11px]">
+          <div>
+            <span className="text-muted-foreground">champion: </span>
+            <VariantSummary outcome={result.champion} />
+          </div>
+          <div>
+            <span className="text-muted-foreground">challenger: </span>
+            <VariantSummary outcome={result.challenger} />
+          </div>
+        </div>
+      )}
+      {expanded && (
+        <div className="grid grid-cols-1 gap-2 border-t p-2 lg:grid-cols-2">
+          <VariantDetail label="champion" outcome={result.champion} />
+          <VariantDetail label="challenger" outcome={result.challenger} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+const ALL_EVAL_CATEGORIES: EvalCategory[] = [
+  'positive_refund',
+  'negative_refund',
+  'lookup',
+  'ambiguity',
+  'policy_boundary',
+  'auth_bola',
+  'auth_bfla',
+  'idempotency',
+  'policy_gate',
+];
+
+function ShadowRunPanel({
+  champion,
+  challenger,
+  lastRun,
+  historyCount,
+  isRunning,
+  progress,
+  liveRun,
+  selectedCategories,
+  onToggleCategory,
+  filteredCount,
+  divergentCount,
+  onStart,
+  onRerunDivergent,
+  onClear,
+}: {
+  champion: ConfigSnapshot | null;
+  challenger: ConfigSnapshot | null;
+  lastRun: ShadowRunResult | null;
+  historyCount: number;
+  isRunning: boolean;
+  progress: ShadowRunProgress | null;
+  liveRun: ShadowRunResult | null;
+  selectedCategories: Set<EvalCategory>;
+  onToggleCategory: (cat: EvalCategory) => void;
+  filteredCount: number;
+  divergentCount: number;
+  onStart: () => void;
+  onRerunDivergent: () => void;
+  onClear: () => void;
+}) {
+  const noPair = !champion || !challenger;
+  const disabled = noPair || isRunning || filteredCount === 0;
+  const disabledReason = noPair
+    ? 'Set both Champion and Challenger to start.'
+    : filteredCount === 0
+      ? 'Pick at least one category.'
+      : null;
+  const displayRun = liveRun ?? lastRun;
+  const pct =
+    progress && progress.totalCases > 0
+      ? Math.round((progress.completedCases / progress.totalCases) * 100)
+      : 0;
+  const countByCategory = ALL_EVAL_CATEGORIES.reduce<
+    Record<EvalCategory, number>
+  >((acc, cat) => {
+    acc[cat] = evalCases.filter((c) => c.category === cat).length;
+    return acc;
+  }, {} as Record<EvalCategory, number>);
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Play className="size-4 text-muted-foreground" />
+          Shadow Run
+          <Badge className="bg-muted text-muted-foreground">
+            history {historyCount}
+          </Badge>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {ALL_EVAL_CATEGORIES.map((cat) => {
+            const active = selectedCategories.has(cat);
+            const count = countByCategory[cat];
+            return (
+              <button
+                key={cat}
+                type="button"
+                onClick={() => onToggleCategory(cat)}
+                disabled={isRunning}
+                className={`rounded-full border px-2 py-0.5 text-[11px] transition disabled:opacity-50 ${
+                  active
+                    ? 'border-primary/40 bg-primary/10 text-primary'
+                    : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted'
+                }`}
+              >
+                {cat} · {count}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" onClick={onStart} disabled={disabled}>
+            {isRunning ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Play className="size-3.5" />
+            )}
+            {isRunning ? 'Running…' : `Start (${filteredCount} cases)`}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onRerunDivergent}
+            disabled={noPair || isRunning || divergentCount === 0}
+            title={
+              divergentCount === 0
+                ? 'No divergent or failed cases in the last run.'
+                : 'Re-run only the cases that diverged or failed last time.'
+            }
+          >
+            <RotateCcw className="size-3.5" />
+            Re-run divergent ({divergentCount})
+          </Button>
+          {(lastRun || historyCount > 0) && (
+            <Button size="sm" variant="ghost" onClick={onClear}>
+              <Trash2 className="size-3.5" />
+              Clear history
+            </Button>
+          )}
+          {disabledReason && (
+            <span className="text-xs text-muted-foreground">
+              {disabledReason}
+            </span>
+          )}
+        </div>
+
+        {isRunning && progress && (
+          <div className="space-y-1 rounded-md border bg-muted/40 px-3 py-2 text-xs">
+            <div className="flex items-center justify-between">
+              <span>
+                Case {progress.completedCases + (progress.currentVariant === 'challenger' ? 1 : 0)}
+                {' / '}
+                {progress.totalCases} · running {progress.currentVariant} on{' '}
+                <span className="font-mono">{progress.currentCaseId}</span>
+              </span>
+              <span className="font-medium">{pct}%</span>
+            </div>
+            <div className="h-1 w-full overflow-hidden rounded bg-muted">
+              <div
+                className="h-full bg-primary transition-[width] duration-200"
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {displayRun ? (
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <Badge className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                identical {displayRun.totals.identical}
+              </Badge>
+              <Badge className="bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                divergent {displayRun.totals.divergent}
+              </Badge>
+              <Badge className="bg-red-500/10 text-red-600 dark:text-red-400">
+                failed {displayRun.totals.failed}
+              </Badge>
+              <span className="font-mono text-[10px] text-muted-foreground">
+                {displayRun.id} · {isRunning ? 'in progress' : new Date(displayRun.completedAt).toLocaleString()}
+              </span>
+            </div>
+            <div className="max-h-96 space-y-1 overflow-y-auto rounded-md border bg-muted/10 p-1">
+              {displayRun.caseResults.map((r) => (
+                <CaseRow key={r.caseId} result={r} />
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-md border border-dashed px-4 py-6 text-center text-xs text-muted-foreground">
+            No shadow run yet.
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function IntegrityBanner({
+  check,
+  driftedTools,
+}: {
+  check: ToolDescriptionIntegrityCheck | null;
+  driftedTools: string[];
+}) {
+  if (!check || check.pass) return null;
+  const tools =
+    check.changedTools.length > 0 ? check.changedTools : driftedTools;
+  const expected = check.expectedHash ?? '';
+  const actual = check.actualHash ?? '';
+  return (
+    <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-400">
+      <div className="flex items-center gap-2 font-medium">
+        <AlertTriangle className="size-3.5" />
+        Tool-description hash drift on Champion
+      </div>
+      <div className="mt-1">
+        Champion snapshot hash{' '}
+        <span className="font-mono">{expected.slice(0, 10) || '—'}</span> no
+        longer matches its current catalog{' '}
+        <span className="font-mono">{actual.slice(0, 10) || '—'}</span>.
+        {tools.length > 0 && (
+          <>
+            {' '}
+            Affected tools:{' '}
+            <span className="font-mono">{tools.join(', ')}</span>.
+          </>
+        )}{' '}
+        Re-run shadow or restore from a clean snapshot before shipping.
+      </div>
+    </div>
+  );
+}
+
+const CANARY_STEPS: Array<0 | 5 | 25 | 50 | 100> = [0, 5, 25, 50, 100];
+
+function CanaryControl({
+  canaryPercent,
+  hasChampion,
+  hasChallenger,
+  onChange,
+}: {
+  canaryPercent: number;
+  hasChampion: boolean;
+  hasChallenger: boolean;
+  onChange: (pct: 0 | 5 | 25 | 50 | 100) => void;
+}) {
+  const gating = !hasChampion
+    ? 'Set a Champion to control canary traffic.'
+    : !hasChallenger
+      ? 'Set a Challenger to route above 0%.'
+      : null;
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Gauge className="size-4 text-muted-foreground" />
+          Canary
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {CANARY_STEPS.map((pct) => {
+            const active = pct === canaryPercent;
+            const disabled = !hasChampion || (pct > 0 && !hasChallenger);
+            return (
+              <Button
+                key={pct}
+                size="sm"
+                variant={active ? 'default' : 'outline'}
+                onClick={() => onChange(pct)}
+                disabled={disabled}
+              >
+                {pct}%
+              </Button>
+            );
+          })}
+          <span className="text-xs text-muted-foreground">
+            Random per request · current {canaryPercent}% to challenger
+          </span>
+        </div>
+        {gating && (
+          <div className="text-xs text-muted-foreground">{gating}</div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+const METRIC_LABELS: Record<GuardrailMetricId, string> = {
+  mismatch_rate: 'mismatch rate',
+  tool_error_rate: 'tool error rate',
+  latency_factor: 'latency factor',
+};
+
+function formatMetricValue(metric: GuardrailMetricId, value: number): string {
+  if (metric === 'latency_factor') return `${value.toFixed(2)}x`;
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function formatThreshold(metric: GuardrailMetricId, threshold: number): string {
+  if (metric === 'latency_factor') return `${threshold.toFixed(2)}x`;
+  return `${(threshold * 100).toFixed(0)}%`;
+}
+
+function GuardrailPanel({
+  config,
+  samples,
+  breaches,
+  onClearBreaches,
+}: {
+  config: import('@/lib/types').GuardrailConfig;
+  samples: import('@/lib/types').GuardrailSample[];
+  breaches: GuardrailBreach[];
+  onClearBreaches: () => void;
+}) {
+  const metrics: GuardrailMetricId[] = [
+    'mismatch_rate',
+    'tool_error_rate',
+    'latency_factor',
+  ];
+  const baseline = championBaseline(
+    samples,
+    config.latency_factor.window,
+  );
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <ShieldCheck className="size-4 text-muted-foreground" />
+          Guardrails
+          <Badge className="bg-muted text-muted-foreground">
+            samples {samples.filter((s) => s.variant === 'challenger').length}
+          </Badge>
+          {breaches.length > 0 && (
+            <Badge className="bg-red-500/10 text-red-600 dark:text-red-400">
+              breaches {breaches.length}
+            </Badge>
+          )}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {breaches.length > 0 && (
+          <div className="space-y-2 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-400">
+            <div className="flex items-center justify-between">
+              <span className="font-medium">
+                <AlertTriangle className="mr-1 inline size-3.5" />
+                Guardrail breached — automatic rollback executed
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={onClearBreaches}
+              >
+                Dismiss
+              </Button>
+            </div>
+            <div className="space-y-1">
+              {breaches.slice(0, 3).map((breach) => (
+                <div key={breach.id} className="font-mono text-[11px]">
+                  {new Date(breach.timestamp).toLocaleTimeString()} ·{' '}
+                  {METRIC_LABELS[breach.metric]}{' '}
+                  {formatMetricValue(breach.metric, breach.value)} &gt;{' '}
+                  {formatThreshold(breach.metric, breach.threshold)} · rolled
+                  back from {breach.previousCanaryPercent}%
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        <div className="space-y-2">
+          {metrics.map((metric) => {
+            const evalResult = evaluateMetric(metric, samples, config, baseline);
+            const ratio =
+              evalResult.threshold > 0
+                ? Math.min(evalResult.value / evalResult.threshold, 1.5)
+                : 0;
+            const breached =
+              evalResult.sampleCount >= evalResult.window &&
+              evalResult.value > evalResult.threshold;
+            return (
+              <div key={metric} className="space-y-1">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">
+                    {METRIC_LABELS[metric]}
+                  </span>
+                  <span className="font-mono">
+                    {formatMetricValue(metric, evalResult.value)}{' '}
+                    <span className="text-muted-foreground">
+                      / {formatThreshold(metric, evalResult.threshold)} ·{' '}
+                      {evalResult.sampleCount}/{evalResult.window}
+                    </span>
+                  </span>
+                </div>
+                <div className="h-1.5 w-full overflow-hidden rounded bg-muted">
+                  <div
+                    className={`h-full transition-[width] duration-200 ${
+                      breached
+                        ? 'bg-red-500'
+                        : ratio > 0.75
+                          ? 'bg-amber-500'
+                          : 'bg-emerald-500'
+                    }`}
+                    style={{
+                      width: `${Math.min(100, (ratio / 1.5) * 100)}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          Challenger samples counted against rolling window · latency compared
+          to champion baseline
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function DriftPanel({
+  hasChampion,
+  hasChallenger,
+  onApply,
+  recentDrifts,
+}: {
+  hasChampion: boolean;
+  hasChallenger: boolean;
+  onApply: (
+    scenarioId: string,
+    target: 'champion' | 'challenger',
+  ) => Promise<{ applied: boolean; reason?: string }>;
+  recentDrifts: RolloutAuditEntry[];
+}) {
+  const [scenarioId, setScenarioId] = useState<string>(
+    DRIFT_SCENARIOS[0]?.id ?? '',
+  );
+  const [target, setTarget] = useState<'champion' | 'challenger'>('champion');
+  const [status, setStatus] = useState<
+    { kind: 'idle' } | { kind: 'ok'; label: string } | { kind: 'err'; reason: string }
+  >({ kind: 'idle' });
+
+  const scenario = DRIFT_SCENARIOS.find((s) => s.id === scenarioId);
+  const disabled =
+    (target === 'champion' ? !hasChampion : !hasChallenger) || !scenario;
+
+  const handleApply = async () => {
+    if (!scenario) return;
+    const res = await onApply(scenarioId, target);
+    if (res.applied) {
+      setStatus({ kind: 'ok', label: scenario.label });
+    } else {
+      setStatus({ kind: 'err', reason: res.reason ?? 'unknown' });
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Zap className="size-4 text-muted-foreground" />
+          Drift Simulation
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-xs text-muted-foreground">
+          Simulates an upstream MCP vendor mutating a tool description without
+          notice. The target snapshot is rewritten in place; its stored
+          integrity hash is left untouched so the banner fires.
+        </p>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto_auto]">
+          <select
+            value={scenarioId}
+            onChange={(e) => setScenarioId(e.target.value)}
+            className="h-8 rounded-md border bg-transparent px-2 text-xs"
+          >
+            {DRIFT_SCENARIOS.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+          <div className="flex items-center gap-1 text-xs">
+            <label className="flex items-center gap-1">
+              <input
+                type="radio"
+                checked={target === 'champion'}
+                onChange={() => setTarget('champion')}
+              />
+              Champion
+            </label>
+            <label className="flex items-center gap-1">
+              <input
+                type="radio"
+                checked={target === 'challenger'}
+                onChange={() => setTarget('challenger')}
+              />
+              Challenger
+            </label>
+          </div>
+          <Button size="sm" onClick={handleApply} disabled={disabled}>
+            <Zap className="size-3.5" />
+            Apply drift
+          </Button>
+        </div>
+        {scenario && (
+          <p className="text-[11px] text-muted-foreground">
+            <span className="font-mono">{scenario.targetToolName}</span>:{' '}
+            {scenario.description}
+          </p>
+        )}
+        {status.kind === 'ok' && (
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+            Applied: {status.label}. Integrity banner should light up and a
+            shadow re-run will highlight the change.
+          </div>
+        )}
+        {status.kind === 'err' && (
+          <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-400">
+            Could not apply drift: {status.reason}.
+          </div>
+        )}
+
+        {recentDrifts.length > 0 && (
+          <div>
+            <div className="pb-1 text-xs font-medium text-muted-foreground">
+              Recent drift events
+            </div>
+            <ScrollArea className="max-h-36">
+              <div className="space-y-1">
+                {recentDrifts.map((entry) => {
+                  const details = entry.details as {
+                    scenarioLabel?: string;
+                    target?: string;
+                    targetTool?: string;
+                    beforeHash?: string;
+                    afterHash?: string;
+                  };
+                  return (
+                    <div
+                      key={entry.id}
+                      className="rounded-md border px-2 py-1 text-[11px]"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Badge className="bg-muted text-muted-foreground">
+                          {details.target ?? '—'}
+                        </Badge>
+                        <span className="font-medium">
+                          {details.scenarioLabel ?? 'drift'}
+                        </span>
+                        <span className="font-mono text-muted-foreground">
+                          {details.targetTool}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+                        {details.beforeHash?.slice(0, 10)} →{' '}
+                        {details.afterHash?.slice(0, 10)} ·{' '}
+                        {new Date(entry.timestamp).toLocaleTimeString()}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </ScrollArea>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function KillSwitchPanel({
+  active,
+  message,
+  onToggle,
+  onMessageChange,
+}: {
+  active: boolean;
+  message: string;
+  onToggle: (next: boolean) => void;
+  onMessageChange: (value: string) => void;
+}) {
+  return (
+    <Card className={active ? 'border-red-500/60 bg-red-500/5' : undefined}>
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center justify-between gap-2 text-base">
+          <span className="flex items-center gap-2">
+            <PowerOff
+              className={
+                active
+                  ? 'size-4 text-red-600 dark:text-red-400'
+                  : 'size-4 text-muted-foreground'
+              }
+            />
+            Kill Switch
+            {active && (
+              <Badge className="bg-red-500/10 text-red-600 dark:text-red-400">
+                ACTIVE
+              </Badge>
+            )}
+          </span>
+          <div className="flex items-center gap-2 text-xs font-normal text-muted-foreground">
+            <span>{active ? 'on' : 'off'}</span>
+            <Switch
+              checked={active}
+              onCheckedChange={onToggle}
+              aria-label="Toggle kill switch"
+            />
+          </div>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <p className="text-xs text-muted-foreground">
+          When active, new chat messages skip the agent entirely and return the
+          fallback below.
+        </p>
+        <div className="space-y-1.5">
+          <Label className="text-xs">Fallback message</Label>
+          <Textarea
+            value={message}
+            onChange={(e) => onMessageChange(e.target.value)}
+            className="min-h-[60px] font-mono text-xs"
+          />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+export function RolloutTab() {
+  const {
+    rollout,
+    setChampion,
+    setChallenger,
+    deleteSnapshot,
+    loadSnapshotToLive,
+    recordShadowRun,
+    clearShadowRuns,
+    setCanaryPercent,
+    toggleKillSwitch,
+    setKillSwitchMessage,
+    clearBreaches,
+    applyDrift,
+  } = useRollout();
+  const { state } = useAppState();
+
+  const champion =
+    rollout.snapshots.find((s) => s.id === rollout.championId) ?? null;
+  const challenger =
+    rollout.snapshots.find((s) => s.id === rollout.challengerId) ?? null;
+  const auditEntries = [...rollout.auditLog].reverse().slice(0, 20);
+  const lastShadowRun = rollout.shadowRunHistory[0] ?? null;
+
+  const [integrityCheck, setIntegrityCheck] =
+    useState<ToolDescriptionIntegrityCheck | null>(null);
+  const [isRunningShadow, setIsRunningShadow] = useState(false);
+  const [shadowError, setShadowError] = useState<string | null>(null);
+  const [shadowProgress, setShadowProgress] = useState<ShadowRunProgress | null>(
+    null,
+  );
+  const [liveShadowRun, setLiveShadowRun] = useState<ShadowRunResult | null>(
+    null,
+  );
+  const [selectedCategories, setSelectedCategories] = useState<Set<EvalCategory>>(
+    () => new Set(evalCases.map((c) => c.category)),
+  );
+
+  const toggleCategory = (cat: EvalCategory) => {
+    setSelectedCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(cat)) next.delete(cat);
+      else next.add(cat);
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    if (!champion) {
+      setIntegrityCheck(null);
+      return;
+    }
+    let cancelled = false;
+    // Self-check: hash the snapshot's own toolCatalog and compare against the
+    // hash that was baked in at creation. Drift simulation mutates the
+    // snapshot's catalog in place without updating the hash, so this check
+    // trips immediately afterwards.
+    checkToolDescriptionIntegrity(champion, champion.toolCatalog)
+      .then((result) => {
+        if (!cancelled) setIntegrityCheck(result);
+      })
+      .catch(() => {
+        if (!cancelled) setIntegrityCheck(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [champion]);
+
+  const filteredCases = evalCases.filter((c) =>
+    selectedCategories.has(c.category),
+  );
+
+  const divergentCaseIds = lastShadowRun
+    ? lastShadowRun.caseResults
+        .filter((r) => r.divergence !== 'identical')
+        .map((r) => r.caseId)
+    : [];
+  const divergentCases = evalCases.filter((c) =>
+    divergentCaseIds.includes(c.id),
+  );
+
+  const runShadowOver = async (cases: typeof evalCases) => {
+    if (!champion || !challenger || cases.length === 0) return;
+    setShadowError(null);
+    setIsRunningShadow(true);
+    setShadowProgress({
+      completedCases: 0,
+      totalCases: cases.length,
+      currentCaseId: cases[0]?.id ?? '',
+      currentVariant: 'champion',
+    });
+    const runStartedAt = new Date().toISOString();
+    setLiveShadowRun({
+      id: 'shr_pending',
+      startedAt: runStartedAt,
+      completedAt: runStartedAt,
+      championId: champion.id,
+      challengerId: challenger.id,
+      caseResults: [],
+      totals: { identical: 0, divergent: 0, failed: 0 },
+    });
+    try {
+      const result = await runShadow({
+        champion,
+        challenger,
+        cases,
+        settings: state.settings,
+        onProgress: setShadowProgress,
+        onCaseComplete: (caseResult) => {
+          setLiveShadowRun((prev) => {
+            if (!prev) return prev;
+            const nextCaseResults = [...prev.caseResults, caseResult];
+            const totals = nextCaseResults.reduce(
+              (acc, r) => {
+                if (r.divergence === 'identical') acc.identical += 1;
+                else if (
+                  r.divergence === 'both_failed' ||
+                  r.divergence === 'champion_only_failed' ||
+                  r.divergence === 'challenger_only_failed'
+                ) {
+                  acc.failed += 1;
+                } else {
+                  acc.divergent += 1;
+                }
+                return acc;
+              },
+              { identical: 0, divergent: 0, failed: 0 },
+            );
+            return { ...prev, caseResults: nextCaseResults, totals };
+          });
+        },
+      });
+      setLiveShadowRun(result);
+      recordShadowRun(result);
+    } catch (err) {
+      setShadowError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsRunningShadow(false);
+      setShadowProgress(null);
+    }
+  };
+
+  const handleStartShadow = () => runShadowOver(filteredCases);
+  const handleRerunDivergent = () => runShadowOver(divergentCases);
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center gap-2">
+        <Rocket className="size-5 text-muted-foreground" />
+        <h2 className="text-lg font-semibold">Rollout</h2>
+        <Badge className="bg-muted text-muted-foreground">Phase 4</Badge>
+      </div>
+
+      <StatusHeader
+        champion={champion}
+        challenger={challenger}
+        canaryPercent={rollout.canaryPercent}
+        killSwitchActive={rollout.killSwitchActive}
+      />
+
+      <IntegrityBanner
+        check={integrityCheck}
+        driftedTools={Array.from(
+          new Set(
+            rollout.auditLog
+              .filter(
+                (e) =>
+                  e.action === 'tool_description_drifted' &&
+                  e.snapshotId === rollout.championId,
+              )
+              .map(
+                (e) =>
+                  (e.details as { targetTool?: string }).targetTool ?? '',
+              )
+              .filter(Boolean),
+          ),
+        )}
+      />
+
+      <CanaryControl
+        canaryPercent={rollout.canaryPercent}
+        hasChampion={!!champion}
+        hasChallenger={!!challenger}
+        onChange={(pct) => setCanaryPercent(pct)}
+      />
+
+      <GuardrailPanel
+        config={rollout.guardrailConfig}
+        samples={rollout.samples}
+        breaches={rollout.breachHistory}
+        onClearBreaches={clearBreaches}
+      />
+
+      <DriftPanel
+        hasChampion={!!champion}
+        hasChallenger={!!challenger}
+        onApply={applyDrift}
+        recentDrifts={rollout.auditLog
+          .filter((e) => e.action === 'tool_description_drifted')
+          .slice()
+          .reverse()
+          .slice(0, 5)}
+      />
+
+      <KillSwitchPanel
+        active={rollout.killSwitchActive}
+        message={rollout.killSwitchMessage}
+        onToggle={(next) => toggleKillSwitch(next)}
+        onMessageChange={setKillSwitchMessage}
+      />
+
+      <ShadowRunPanel
+        champion={champion}
+        challenger={challenger}
+        lastRun={lastShadowRun}
+        historyCount={rollout.shadowRunHistory.length}
+        isRunning={isRunningShadow}
+        progress={shadowProgress}
+        liveRun={liveShadowRun}
+        selectedCategories={selectedCategories}
+        onToggleCategory={toggleCategory}
+        filteredCount={filteredCases.length}
+        divergentCount={divergentCases.length}
+        onStart={handleStartShadow}
+        onRerunDivergent={handleRerunDivergent}
+        onClear={() => {
+          clearShadowRuns();
+          setLiveShadowRun(null);
+        }}
+      />
+      {shadowError && (
+        <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-400">
+          Shadow run failed: {shadowError}
+        </div>
+      )}
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <ShieldCheck className="size-4 text-muted-foreground" />
+            Snapshots
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {rollout.snapshots.length === 0 ? (
+            <div className="rounded-md border border-dashed px-4 py-6 text-center text-xs text-muted-foreground">
+              No snapshots yet. Save one from the Contracts tab.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {rollout.snapshots.map((snap) => {
+                const isChampion = snap.id === rollout.championId;
+                const isChallenger = snap.id === rollout.challengerId;
+                return (
+                  <div key={snap.id} className="rounded-lg border p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-0.5">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium">
+                            {snap.label}
+                          </span>
+                          {isChampion && (
+                            <Badge className="bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                              <Crown className="size-3" /> Champion
+                            </Badge>
+                          )}
+                          {isChallenger && (
+                            <Badge className="bg-sky-500/10 text-sky-600 dark:text-sky-400">
+                              <Swords className="size-3" /> Challenger
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="font-mono text-[10px] text-muted-foreground">
+                          {snap.id}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {new Date(snap.createdAt).toLocaleString()}
+                        </div>
+                        {snap.notes && (
+                          <div className="pt-1 text-xs">{snap.notes}</div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setChampion(snap.id)}
+                          disabled={isChampion}
+                        >
+                          <Crown className="size-3" />
+                          Champion
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            setChallenger(isChallenger ? null : snap.id)
+                          }
+                        >
+                          <Swords className="size-3" />
+                          {isChallenger ? 'Clear' : 'Challenger'}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => loadSnapshotToLive(snap.id)}
+                          title="Load into live state to edit, then save as a new snapshot"
+                        >
+                          <Pencil className="size-3" />
+                          Edit
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => deleteSnapshot(snap.id)}
+                        >
+                          <Trash2 className="size-3" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <History className="size-4 text-muted-foreground" />
+            Rollout Audit Log
+            <Badge className="bg-muted text-muted-foreground">
+              {rollout.auditLog.length}
+            </Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {auditEntries.length === 0 ? (
+            <div className="rounded-md border border-dashed px-4 py-6 text-center text-xs text-muted-foreground">
+              No rollout events yet.
+            </div>
+          ) : (
+            <ScrollArea className="max-h-64">
+              <div className="space-y-1">
+                {auditEntries.map((entry) => (
+                  <div
+                    key={entry.id}
+                    className="grid grid-cols-[auto_auto_1fr_auto] items-center gap-2 rounded-md border px-2 py-1.5 text-xs"
+                  >
+                    <span className="font-mono text-[10px] text-muted-foreground">
+                      {new Date(entry.timestamp).toLocaleTimeString()}
+                    </span>
+                    <Badge className="bg-muted text-muted-foreground">
+                      {formatActor(entry)}
+                    </Badge>
+                    <span className="font-medium">{entry.action}</span>
+                    {entry.snapshotId && (
+                      <span className="font-mono text-[10px] text-muted-foreground">
+                        {snapshotDisplayId(entry.snapshotId)}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+          )}
+        </CardContent>
+      </Card>
+
+      <Separator />
+      <p className="text-[11px] text-muted-foreground">
+        Full rollout loop: snapshots, shadow runs, tool-description
+        integrity, canary with auto-rollback guardrails, kill switch, drift
+        simulation.
+      </p>
+    </div>
+  );
+}

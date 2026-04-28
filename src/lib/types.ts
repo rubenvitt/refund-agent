@@ -209,6 +209,8 @@ export type TraceEntry = {
   data: Record<string, unknown>;
 };
 
+export type RolloutVariant = 'champion' | 'challenger';
+
 export type RunTrace = {
   id: string;
   requestId: string;
@@ -222,6 +224,8 @@ export type RunTrace = {
   finalAnswer: string | null;
   stateChanges: Array<{ field: string; before: unknown; after: unknown }>;
   auditEntryIds: string[];
+  configSnapshotId?: string | null;
+  variant?: RolloutVariant | null;
 };
 
 // ── Evals ──
@@ -387,4 +391,139 @@ export type ApprovalRequest = {
   toolName: string;
   arguments: Record<string, unknown>;
   message: string;
+};
+
+// ── Rollout ──
+
+export type ConfigSnapshot = {
+  id: string;
+  createdAt: string;
+  label: string;
+  promptConfig: PromptConfig;
+  toolCatalog: ToolCatalog;
+  notes: string;
+  toolDescriptionsHash: string;
+};
+
+export type ToolDescriptionIntegrityCheck = {
+  pass: boolean;
+  expectedHash: string;
+  actualHash: string;
+  changedTools: string[];
+};
+
+export type RolloutAuditAction =
+  | 'snapshot_created'
+  | 'snapshot_deleted'
+  | 'snapshot_loaded_to_live'
+  | 'champion_set'
+  | 'challenger_set'
+  | 'challenger_cleared'
+  | 'shadow_run_completed'
+  | 'canary_promoted'
+  | 'kill_switch_toggled'
+  | 'rolled_back_auto'
+  | 'tool_description_drifted';
+
+export type CanaryPercent = 0 | 5 | 25 | 50 | 100;
+
+export type RolloutAuditEntry = {
+  id: string;
+  timestamp: string;
+  actor: AuditActor;
+  action: RolloutAuditAction;
+  snapshotId: string | null;
+  details: Record<string, unknown>;
+};
+
+export const DEFAULT_KILL_SWITCH_MESSAGE =
+  'AI assistance is temporarily unavailable — a human agent will reach out.';
+
+export type GuardrailMetricId =
+  | 'mismatch_rate'
+  | 'tool_error_rate'
+  | 'latency_factor';
+
+export type GuardrailThreshold = {
+  threshold: number;
+  window: number;
+};
+
+export type GuardrailConfig = Record<GuardrailMetricId, GuardrailThreshold>;
+
+export type GuardrailSample = {
+  requestId: string;
+  timestamp: string;
+  variant: RolloutVariant;
+  mismatch: boolean;
+  toolError: boolean;
+  latencyMs: number;
+};
+
+export type GuardrailMetricEvaluation = {
+  metric: GuardrailMetricId;
+  value: number;
+  threshold: number;
+  window: number;
+  sampleCount: number;
+};
+
+export type GuardrailBreach = GuardrailMetricEvaluation & {
+  id: string;
+  timestamp: string;
+  previousCanaryPercent: CanaryPercent;
+};
+
+export type RolloutState = {
+  snapshots: ConfigSnapshot[];
+  championId: string | null;
+  challengerId: string | null;
+  canaryPercent: CanaryPercent;
+  killSwitchActive: boolean;
+  killSwitchMessage: string;
+  auditLog: RolloutAuditEntry[];
+  shadowRunHistory: ShadowRunResult[];
+  guardrailConfig: GuardrailConfig;
+  samples: GuardrailSample[];
+  breachHistory: GuardrailBreach[];
+};
+
+export type DivergenceKind =
+  | 'identical'
+  | 'route_differs'
+  | 'tool_calls_differ'
+  | 'both_failed'
+  | 'champion_only_failed'
+  | 'challenger_only_failed';
+
+export type ShadowToolCall = {
+  name: string;
+  args: Record<string, unknown>;
+};
+
+export type ShadowRunVariantOutcome = {
+  route: RouteDecision | null;
+  toolNames: string[];
+  toolCalls: ShadowToolCall[];
+  finalAnswer: string;
+  mismatchCount: number;
+  error: string | null;
+};
+
+export type ShadowRunCaseResult = {
+  caseId: string;
+  userMessage: string;
+  champion: ShadowRunVariantOutcome;
+  challenger: ShadowRunVariantOutcome;
+  divergence: DivergenceKind;
+};
+
+export type ShadowRunResult = {
+  id: string;
+  startedAt: string;
+  completedAt: string;
+  championId: string;
+  challengerId: string;
+  caseResults: ShadowRunCaseResult[];
+  totals: { identical: number; divergent: number; failed: number };
 };

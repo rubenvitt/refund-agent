@@ -27,7 +27,7 @@ describe('lookupOrder', () => {
 describe('verifyCustomer', () => {
   it('verifies customer with correct email', () => {
     const state = createSeedState();
-    const result = verifyCustomer(state, { customerId: 'C001', email: 'max@example.com' });
+    const result = verifyCustomer(state, { customerId: 'C001', email: 'max.mustermann@example.com' });
     expect((result.result as { verified: boolean }).verified).toBe(true);
   });
 
@@ -113,7 +113,7 @@ describe('faqSearch', () => {
 describe('resetPassword', () => {
   it('succeeds for existing customer email', () => {
     const state = createSeedState();
-    const result = resetPassword(state, { email: 'max@example.com' });
+    const result = resetPassword(state, { email: 'max.mustermann@example.com' });
     expect((result.result as { success: boolean }).success).toBe(true);
   });
 

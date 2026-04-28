@@ -1,7 +1,7 @@
 import type { DemoState, Customer, Order, StructuredAuditEntry } from './types';
 
 const customers: Customer[] = [
-  { id: 'C001', name: 'Max Mustermann', email: 'max@example.com', verified: true },
+  { id: 'C001', name: 'Max Mustermann', email: 'max.mustermann@example.com', verified: true },
   { id: 'C002', name: 'Erika Beispiel', email: 'erika@example.com', verified: true },
   { id: 'C003', name: 'Unknown User', email: 'unknown@example.com', verified: false },
 ];

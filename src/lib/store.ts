@@ -17,6 +17,67 @@ import type {
 import { createSeedState } from './seed-data';
 import { createEmptyLedger } from './idempotency';
 import { defaultPromptConfig, defaultToolCatalog } from './default-prompts';
+import {
+  createEmptyRolloutState,
+  createRolloutAuditEntry,
+  createSnapshot,
+  hashToolDescriptions,
+} from './rollout';
+import { applyDriftToCatalog, findDriftScenario } from './drift-scenarios';
+import type {
+  CanaryPercent,
+  ConfigSnapshot,
+  GuardrailBreach,
+  GuardrailSample,
+  RolloutAuditEntry,
+  RolloutState,
+  ShadowRunCaseResult,
+  ShadowRunResult,
+  ShadowRunVariantOutcome,
+} from './types';
+
+// Older persisted shadow runs (pre April 2026) classified non-deterministic
+// final-answer text differences as 'final_answer_differs'. We dropped that —
+// route + tool sequence is the real behavioural signal — so re-tag legacy
+// entries as identical and add the missing toolCalls field on hydration.
+function migrateVariantOutcome(
+  outcome: ShadowRunVariantOutcome & { toolCalls?: ShadowRunVariantOutcome['toolCalls'] },
+): ShadowRunVariantOutcome {
+  if (Array.isArray(outcome.toolCalls)) return outcome;
+  return {
+    ...outcome,
+    toolCalls: outcome.toolNames.map((name) => ({ name, args: {} })),
+  };
+}
+
+function migrateShadowRun(run: ShadowRunResult): ShadowRunResult {
+  const caseResults: ShadowRunCaseResult[] = run.caseResults.map((r) => ({
+    ...r,
+    champion: migrateVariantOutcome(r.champion),
+    challenger: migrateVariantOutcome(r.challenger),
+    divergence:
+      (r.divergence as string) === 'final_answer_differs'
+        ? 'identical'
+        : r.divergence,
+  }));
+  const totals = caseResults.reduce(
+    (acc, r) => {
+      if (r.divergence === 'identical') acc.identical += 1;
+      else if (
+        r.divergence === 'both_failed' ||
+        r.divergence === 'champion_only_failed' ||
+        r.divergence === 'challenger_only_failed'
+      ) {
+        acc.failed += 1;
+      } else {
+        acc.divergent += 1;
+      }
+      return acc;
+    },
+    { identical: 0, divergent: 0, failed: 0 },
+  );
+  return { ...run, caseResults, totals };
+}
 
 // ── Chat Message ──
 
@@ -24,6 +85,8 @@ export type ChatMessage = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  variant?: 'champion' | 'challenger' | null;
+  configSnapshotLabel?: string | null;
 };
 
 // ── State Shape ──
@@ -42,6 +105,7 @@ export type AppState = {
   chatMessages: ChatMessage[];
   toolCallLedger: ToolCallLedger;
   session: UserSession | null;
+  rollout: RolloutState;
 };
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -51,7 +115,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   anthropicApiKey: '',
 };
 
-function getInitialState(): AppState {
+export function getInitialState(): AppState {
   return {
     settings: DEFAULT_SETTINGS,
     demoState: createSeedState(),
@@ -66,6 +130,7 @@ function getInitialState(): AppState {
     chatMessages: [],
     toolCallLedger: createEmptyLedger(),
     session: null,
+    rollout: createEmptyRolloutState(),
   };
 }
 
@@ -94,9 +159,27 @@ export type AppAction =
   | { type: 'CLEAR_AUDIT_LOG' }
   | { type: 'UPDATE_LEDGER'; payload: ToolCallLedger }
   | { type: 'CLEAR_LEDGER' }
-  | { type: 'SET_SESSION'; payload: UserSession | null };
+  | { type: 'SET_SESSION'; payload: UserSession | null }
+  | { type: 'ADD_ROLLOUT_SNAPSHOT'; payload: ConfigSnapshot }
+  | { type: 'DELETE_ROLLOUT_SNAPSHOT'; payload: string }
+  | { type: 'SET_ROLLOUT_CHAMPION'; payload: string | null }
+  | { type: 'SET_ROLLOUT_CHALLENGER'; payload: string | null }
+  | { type: 'APPEND_ROLLOUT_AUDIT'; payload: RolloutAuditEntry }
+  | { type: 'APPEND_SHADOW_RUN'; payload: ShadowRunResult }
+  | { type: 'CLEAR_SHADOW_RUNS' }
+  | { type: 'SET_CANARY_PERCENT'; payload: CanaryPercent }
+  | { type: 'SET_KILL_SWITCH'; payload: boolean }
+  | { type: 'SET_KILL_SWITCH_MESSAGE'; payload: string }
+  | {
+      type: 'UPDATE_SNAPSHOT_TOOL_CATALOG';
+      payload: { snapshotId: string; toolCatalog: ToolCatalog };
+    }
+  | { type: 'APPEND_GUARDRAIL_SAMPLE'; payload: GuardrailSample }
+  | { type: 'RECORD_GUARDRAIL_BREACH'; payload: GuardrailBreach }
+  | { type: 'CLEAR_GUARDRAIL_BREACHES' }
+  | { type: 'RESET_ROLLOUT' };
 
-function reducer(state: AppState, action: AppAction): AppState {
+export function reducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
     case 'UPDATE_SETTINGS':
       return { ...state, settings: { ...state.settings, ...action.payload } };
@@ -166,6 +249,109 @@ function reducer(state: AppState, action: AppAction): AppState {
       return { ...state, toolCallLedger: createEmptyLedger() };
     case 'SET_SESSION':
       return { ...state, session: action.payload };
+    case 'ADD_ROLLOUT_SNAPSHOT':
+      return {
+        ...state,
+        rollout: {
+          ...state.rollout,
+          snapshots: [...state.rollout.snapshots, action.payload],
+        },
+      };
+    case 'DELETE_ROLLOUT_SNAPSHOT': {
+      const id = action.payload;
+      return {
+        ...state,
+        rollout: {
+          ...state.rollout,
+          snapshots: state.rollout.snapshots.filter((s) => s.id !== id),
+          championId: state.rollout.championId === id ? null : state.rollout.championId,
+          challengerId: state.rollout.challengerId === id ? null : state.rollout.challengerId,
+        },
+      };
+    }
+    case 'SET_ROLLOUT_CHAMPION':
+      return { ...state, rollout: { ...state.rollout, championId: action.payload } };
+    case 'SET_ROLLOUT_CHALLENGER':
+      return { ...state, rollout: { ...state.rollout, challengerId: action.payload } };
+    case 'APPEND_ROLLOUT_AUDIT':
+      return {
+        ...state,
+        rollout: {
+          ...state.rollout,
+          auditLog: [...state.rollout.auditLog, action.payload],
+        },
+      };
+    case 'APPEND_SHADOW_RUN':
+      return {
+        ...state,
+        rollout: {
+          ...state.rollout,
+          shadowRunHistory: [
+            action.payload,
+            ...state.rollout.shadowRunHistory,
+          ].slice(0, MAX_SHADOW_RUN_HISTORY),
+        },
+      };
+    case 'CLEAR_SHADOW_RUNS':
+      return {
+        ...state,
+        rollout: { ...state.rollout, shadowRunHistory: [] },
+      };
+    case 'SET_CANARY_PERCENT':
+      return {
+        ...state,
+        rollout: { ...state.rollout, canaryPercent: action.payload },
+      };
+    case 'SET_KILL_SWITCH':
+      return {
+        ...state,
+        rollout: { ...state.rollout, killSwitchActive: action.payload },
+      };
+    case 'SET_KILL_SWITCH_MESSAGE':
+      return {
+        ...state,
+        rollout: { ...state.rollout, killSwitchMessage: action.payload },
+      };
+    case 'UPDATE_SNAPSHOT_TOOL_CATALOG':
+      return {
+        ...state,
+        rollout: {
+          ...state.rollout,
+          snapshots: state.rollout.snapshots.map((snap) =>
+            snap.id === action.payload.snapshotId
+              ? { ...snap, toolCatalog: action.payload.toolCatalog }
+              : snap,
+          ),
+        },
+      };
+    case 'APPEND_GUARDRAIL_SAMPLE':
+      return {
+        ...state,
+        rollout: {
+          ...state.rollout,
+          samples: [...state.rollout.samples, action.payload].slice(
+            -MAX_GUARDRAIL_SAMPLES,
+          ),
+        },
+      };
+    case 'RECORD_GUARDRAIL_BREACH':
+      return {
+        ...state,
+        rollout: {
+          ...state.rollout,
+          breachHistory: [
+            action.payload,
+            ...state.rollout.breachHistory,
+          ].slice(0, MAX_BREACH_HISTORY),
+        },
+      };
+    case 'CLEAR_GUARDRAIL_BREACHES':
+      return {
+        ...state,
+        rollout: { ...state.rollout, breachHistory: [] },
+      };
+    case 'RESET_ROLLOUT':
+      return { ...state, rollout: createEmptyRolloutState() };
     default:
       return state;
   }
@@ -185,7 +371,12 @@ const AppContext = createContext<AppContextValue | null>(null);
 const LS_KEY = 'support-agent-lab';
 const LS_KEY_AUDIT = 'support-agent-lab:audit';
 const LS_KEY_LEDGER = 'support-agent-lab:ledger';
+const LS_KEY_ROLLOUT = 'support-agent-lab:rollout';
 const MAX_AUDIT_ENTRIES = 200;
+const MAX_ROLLOUT_AUDIT_ENTRIES = 200;
+const MAX_SHADOW_RUN_HISTORY = 10;
+const MAX_GUARDRAIL_SAMPLES = 100;
+const MAX_BREACH_HISTORY = 20;
 
 function loadFromLocalStorage(): Partial<AppState> | null {
   if (typeof window === 'undefined') return null;
@@ -257,6 +448,36 @@ function loadLedger(): ToolCallLedger | null {
   }
 }
 
+function saveRollout(rollout: RolloutState) {
+  if (typeof window === 'undefined') return;
+  try {
+    const trimmed: RolloutState = {
+      ...rollout,
+      auditLog: rollout.auditLog.slice(-MAX_ROLLOUT_AUDIT_ENTRIES),
+      shadowRunHistory: rollout.shadowRunHistory.slice(
+        0,
+        MAX_SHADOW_RUN_HISTORY,
+      ),
+      samples: rollout.samples.slice(-MAX_GUARDRAIL_SAMPLES),
+      breachHistory: rollout.breachHistory.slice(0, MAX_BREACH_HISTORY),
+    };
+    localStorage.setItem(LS_KEY_ROLLOUT, JSON.stringify(trimmed));
+  } catch {
+    // quota exceeded — silently ignore
+  }
+}
+
+function loadRollout(): RolloutState | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(LS_KEY_ROLLOUT);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
 // ── Provider ──
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
@@ -287,6 +508,70 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (savedLedger) {
       dispatch({ type: 'UPDATE_LEDGER', payload: savedLedger });
     }
+    const savedRollout = loadRollout();
+    if (savedRollout) {
+      dispatch({ type: 'RESET_ROLLOUT' });
+      for (const snap of savedRollout.snapshots) {
+        if (snap.toolDescriptionsHash) {
+          dispatch({ type: 'ADD_ROLLOUT_SNAPSHOT', payload: snap });
+        } else {
+          // Migrate legacy snapshots (pre-F7) that lack a baked hash.
+          hashToolDescriptions(snap.toolCatalog)
+            .then((toolDescriptionsHash) => {
+              dispatch({
+                type: 'ADD_ROLLOUT_SNAPSHOT',
+                payload: { ...snap, toolDescriptionsHash },
+              });
+            })
+            .catch(() => {
+              dispatch({
+                type: 'ADD_ROLLOUT_SNAPSHOT',
+                payload: { ...snap, toolDescriptionsHash: '' },
+              });
+            });
+        }
+      }
+      if (savedRollout.championId) {
+        dispatch({ type: 'SET_ROLLOUT_CHAMPION', payload: savedRollout.championId });
+      }
+      if (savedRollout.challengerId) {
+        dispatch({ type: 'SET_ROLLOUT_CHALLENGER', payload: savedRollout.challengerId });
+      }
+      for (const entry of savedRollout.auditLog) {
+        dispatch({ type: 'APPEND_ROLLOUT_AUDIT', payload: entry });
+      }
+      // Replay oldest-first so the reducer's prepend-and-cap yields the
+      // correct newest-first order after hydration.
+      const history = savedRollout.shadowRunHistory ?? [];
+      for (const run of [...history].reverse()) {
+        dispatch({ type: 'APPEND_SHADOW_RUN', payload: migrateShadowRun(run) });
+      }
+      if (typeof savedRollout.canaryPercent === 'number') {
+        dispatch({
+          type: 'SET_CANARY_PERCENT',
+          payload: savedRollout.canaryPercent,
+        });
+      }
+      if (typeof savedRollout.killSwitchActive === 'boolean') {
+        dispatch({
+          type: 'SET_KILL_SWITCH',
+          payload: savedRollout.killSwitchActive,
+        });
+      }
+      if (typeof savedRollout.killSwitchMessage === 'string') {
+        dispatch({
+          type: 'SET_KILL_SWITCH_MESSAGE',
+          payload: savedRollout.killSwitchMessage,
+        });
+      }
+      for (const sample of savedRollout.samples ?? []) {
+        dispatch({ type: 'APPEND_GUARDRAIL_SAMPLE', payload: sample });
+      }
+      const breaches = savedRollout.breachHistory ?? [];
+      for (const breach of [...breaches].reverse()) {
+        dispatch({ type: 'RECORD_GUARDRAIL_BREACH', payload: breach });
+      }
+    }
     setHydrated(true);
   }, []);
 
@@ -305,6 +590,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!hydrated) return;
     saveLedger(state.toolCallLedger);
   }, [hydrated, state.toolCallLedger]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    saveRollout(state.rollout);
+  }, [hydrated, state.rollout]);
 
   return React.createElement(
     AppContext.Provider,
@@ -345,5 +635,239 @@ export function useSession() {
     session: state.session,
     setSession: (session: UserSession | null) =>
       dispatch({ type: 'SET_SESSION', payload: session }),
+  };
+}
+
+export function useRollout() {
+  const { state, dispatch } = useAppState();
+
+  const saveSnapshot = async (label: string, notes: string) => {
+    const toolDescriptionsHash = await hashToolDescriptions(state.toolCatalog);
+    const snap = createSnapshot(
+      label,
+      state.promptConfig,
+      state.toolCatalog,
+      notes,
+      toolDescriptionsHash,
+    );
+    dispatch({ type: 'ADD_ROLLOUT_SNAPSHOT', payload: snap });
+    dispatch({
+      type: 'APPEND_ROLLOUT_AUDIT',
+      payload: createRolloutAuditEntry({
+        actor: { type: 'user' },
+        action: 'snapshot_created',
+        snapshotId: snap.id,
+        details: { label, notes, toolDescriptionsHash },
+      }),
+    });
+    return snap;
+  };
+
+  const setChampion = (snapshotId: string) => {
+    dispatch({ type: 'SET_ROLLOUT_CHAMPION', payload: snapshotId });
+    dispatch({
+      type: 'APPEND_ROLLOUT_AUDIT',
+      payload: createRolloutAuditEntry({
+        actor: { type: 'user' },
+        action: 'champion_set',
+        snapshotId,
+        details: {},
+      }),
+    });
+  };
+
+  const setChallenger = (snapshotId: string | null) => {
+    dispatch({ type: 'SET_ROLLOUT_CHALLENGER', payload: snapshotId });
+    dispatch({
+      type: 'APPEND_ROLLOUT_AUDIT',
+      payload: createRolloutAuditEntry({
+        actor: { type: 'user' },
+        action: snapshotId ? 'challenger_set' : 'challenger_cleared',
+        snapshotId,
+        details: {},
+      }),
+    });
+  };
+
+  const deleteSnapshot = (snapshotId: string) => {
+    dispatch({ type: 'DELETE_ROLLOUT_SNAPSHOT', payload: snapshotId });
+    dispatch({
+      type: 'APPEND_ROLLOUT_AUDIT',
+      payload: createRolloutAuditEntry({
+        actor: { type: 'user' },
+        action: 'snapshot_deleted',
+        snapshotId,
+        details: {},
+      }),
+    });
+  };
+
+  // Reverse of saveSnapshot: copy the snapshot's frozen prompts/tools back
+  // into live state so the user can edit them in the Contracts tab and
+  // re-snapshot. Live edits never mutate the original snapshot — that
+  // immutability is what makes rollouts safe.
+  const loadSnapshotToLive = (snapshotId: string) => {
+    const snap = state.rollout.snapshots.find((s) => s.id === snapshotId);
+    if (!snap) return;
+    dispatch({
+      type: 'UPDATE_PROMPT_CONFIG',
+      payload: structuredClone(snap.promptConfig),
+    });
+    dispatch({
+      type: 'UPDATE_TOOL_CATALOG',
+      payload: structuredClone(snap.toolCatalog),
+    });
+    dispatch({
+      type: 'APPEND_ROLLOUT_AUDIT',
+      payload: createRolloutAuditEntry({
+        actor: { type: 'user' },
+        action: 'snapshot_loaded_to_live',
+        snapshotId,
+        details: { label: snap.label },
+      }),
+    });
+  };
+
+  const recordShadowRun = (run: ShadowRunResult) => {
+    dispatch({ type: 'APPEND_SHADOW_RUN', payload: run });
+    dispatch({
+      type: 'APPEND_ROLLOUT_AUDIT',
+      payload: createRolloutAuditEntry({
+        actor: { type: 'user' },
+        action: 'shadow_run_completed',
+        snapshotId: run.challengerId,
+        details: {
+          shadowRunId: run.id,
+          championId: run.championId,
+          totals: run.totals,
+          caseCount: run.caseResults.length,
+        },
+      }),
+    });
+  };
+
+  const clearShadowRuns = () => {
+    dispatch({ type: 'CLEAR_SHADOW_RUNS' });
+  };
+
+  const setCanaryPercent = (
+    pct: CanaryPercent,
+    actor: 'user' | 'system' = 'user',
+  ) => {
+    dispatch({ type: 'SET_CANARY_PERCENT', payload: pct });
+    dispatch({
+      type: 'APPEND_ROLLOUT_AUDIT',
+      payload: createRolloutAuditEntry({
+        actor:
+          actor === 'user'
+            ? { type: 'user' }
+            : { type: 'system', component: 'rollout' },
+        action: pct === 0 && actor === 'system' ? 'rolled_back_auto' : 'canary_promoted',
+        snapshotId: state.rollout.challengerId,
+        details: { to: pct, from: state.rollout.canaryPercent },
+      }),
+    });
+  };
+
+  const toggleKillSwitch = (nextActive?: boolean) => {
+    const active = nextActive ?? !state.rollout.killSwitchActive;
+    dispatch({ type: 'SET_KILL_SWITCH', payload: active });
+    dispatch({
+      type: 'APPEND_ROLLOUT_AUDIT',
+      payload: createRolloutAuditEntry({
+        actor: { type: 'user' },
+        action: 'kill_switch_toggled',
+        snapshotId: null,
+        details: { active },
+      }),
+    });
+  };
+
+  const setKillSwitchMessage = (message: string) => {
+    dispatch({ type: 'SET_KILL_SWITCH_MESSAGE', payload: message });
+  };
+
+  const appendSample = (sample: GuardrailSample) => {
+    dispatch({ type: 'APPEND_GUARDRAIL_SAMPLE', payload: sample });
+  };
+
+  const recordBreach = (breach: GuardrailBreach) => {
+    dispatch({ type: 'RECORD_GUARDRAIL_BREACH', payload: breach });
+    dispatch({
+      type: 'APPEND_ROLLOUT_AUDIT',
+      payload: createRolloutAuditEntry({
+        actor: { type: 'system', component: 'rollout_guardrail' },
+        action: 'rolled_back_auto',
+        snapshotId: state.rollout.challengerId,
+        details: {
+          metric: breach.metric,
+          value: breach.value,
+          threshold: breach.threshold,
+          previousCanaryPercent: breach.previousCanaryPercent,
+        },
+      }),
+    });
+  };
+
+  const clearBreaches = () => {
+    dispatch({ type: 'CLEAR_GUARDRAIL_BREACHES' });
+  };
+
+  const applyDrift = async (
+    scenarioId: string,
+    target: 'champion' | 'challenger',
+  ): Promise<{ applied: boolean; reason?: string }> => {
+    const scenario = findDriftScenario(scenarioId);
+    if (!scenario) return { applied: false, reason: 'unknown_scenario' };
+    const targetId =
+      target === 'champion' ? state.rollout.championId : state.rollout.challengerId;
+    if (!targetId) return { applied: false, reason: 'no_target_snapshot' };
+    const snap = state.rollout.snapshots.find((s) => s.id === targetId);
+    if (!snap) return { applied: false, reason: 'target_snapshot_missing' };
+    const { catalog, touched } = applyDriftToCatalog(scenario, snap.toolCatalog);
+    if (!touched) {
+      return { applied: false, reason: 'target_tool_not_in_catalog' };
+    }
+    const beforeHash = await hashToolDescriptions(snap.toolCatalog);
+    const afterHash = await hashToolDescriptions(catalog);
+    dispatch({
+      type: 'UPDATE_SNAPSHOT_TOOL_CATALOG',
+      payload: { snapshotId: snap.id, toolCatalog: catalog },
+    });
+    dispatch({
+      type: 'APPEND_ROLLOUT_AUDIT',
+      payload: createRolloutAuditEntry({
+        actor: { type: 'system', component: 'mcp_vendor' },
+        action: 'tool_description_drifted',
+        snapshotId: snap.id,
+        details: {
+          scenarioId: scenario.id,
+          scenarioLabel: scenario.label,
+          target,
+          targetTool: scenario.targetToolName,
+          beforeHash,
+          afterHash,
+        },
+      }),
+    });
+    return { applied: true };
+  };
+
+  return {
+    rollout: state.rollout,
+    saveSnapshot,
+    setChampion,
+    setChallenger,
+    deleteSnapshot,
+    loadSnapshotToLive,
+    recordShadowRun,
+    clearShadowRuns,
+    setCanaryPercent,
+    toggleKillSwitch,
+    setKillSwitchMessage,
+    appendSample,
+    recordBreach,
+    clearBreaches,
+    applyDrift,
   };
 }

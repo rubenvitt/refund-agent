@@ -10,6 +10,13 @@ import { createSeedState } from './seed-data';
 import { gradeWithLlm } from './llm-grader';
 import { optimizePrompts, type OptimizationResult } from './prompt-optimizer';
 import { createEmptyLedger } from './idempotency';
+import { pickVariant } from './rollout';
+import {
+  championBaseline,
+  createBreachRecord,
+  evaluateGuardrails,
+} from './rollout-guardrails';
+import type { GuardrailSample, RolloutVariant } from './types';
 
 export function useChat() {
   const { state, dispatch } = useAppState();
@@ -27,6 +34,19 @@ export function useChat() {
       setIsLoading(true);
 
       try {
+        if (state.rollout.killSwitchActive) {
+          const fallbackMsg: ChatMessage = {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: state.rollout.killSwitchMessage,
+            variant: null,
+            configSnapshotLabel: null,
+          };
+          dispatch({ type: 'ADD_CHAT_MESSAGE', payload: fallbackMsg });
+          setIsLoading(false);
+          return;
+        }
+
         const apiKey =
           state.settings.provider === 'openai'
             ? state.settings.openaiApiKey
@@ -36,6 +56,23 @@ export function useChat() {
           throw new Error(`API key not configured for ${state.settings.provider}`);
         }
 
+        const champion =
+          state.rollout.snapshots.find(
+            (s) => s.id === state.rollout.championId,
+          ) ?? null;
+        const challenger =
+          state.rollout.snapshots.find(
+            (s) => s.id === state.rollout.challengerId,
+          ) ?? null;
+        const picked = pickVariant({
+          champion,
+          challenger,
+          canaryPercent: state.rollout.canaryPercent,
+        });
+        const activePromptConfig = picked.snapshot?.promptConfig ?? state.promptConfig;
+        const activeToolCatalog = picked.snapshot?.toolCatalog ?? state.toolCatalog;
+        const runStartedAt = Date.now();
+
         const result = await runWorkflow({
           userMessage: content,
           conversationHistory: state.chatMessages.map((m) => ({
@@ -43,20 +80,29 @@ export function useChat() {
             content: m.content,
           })),
           settings: state.settings,
-          promptConfig: state.promptConfig,
-          toolCatalog: state.toolCatalog,
+          promptConfig: activePromptConfig,
+          toolCatalog: activeToolCatalog,
           demoState: state.demoState,
           toolCallLedger: state.toolCallLedger,
           session: state.session,
         });
+        const runLatencyMs = Date.now() - runStartedAt;
+
+        const stampedTrace = {
+          ...result.trace,
+          configSnapshotId: picked.snapshot?.id ?? null,
+          variant: picked.variant,
+        };
 
         const assistantMsg: ChatMessage = {
           id: crypto.randomUUID(),
           role: 'assistant',
           content: result.finalAnswer,
+          variant: picked.variant,
+          configSnapshotLabel: picked.snapshot?.label ?? null,
         };
         dispatch({ type: 'ADD_CHAT_MESSAGE', payload: assistantMsg });
-        dispatch({ type: 'ADD_TRACE', payload: result.trace });
+        dispatch({ type: 'ADD_TRACE', payload: stampedTrace });
         dispatch({ type: 'UPDATE_DEMO_STATE', payload: result.updatedState });
         dispatch({ type: 'UPDATE_LEDGER', payload: result.updatedLedger });
         if (result.auditEntries.length > 0) {
@@ -65,6 +111,55 @@ export function useChat() {
 
         if (result.approvalRequest) {
           dispatch({ type: 'SET_APPROVAL_REQUEST', payload: result.approvalRequest });
+        }
+
+        // Guardrails: sample every routed request so the breach detector has
+        // both champion-baseline and challenger data.
+        if (picked.variant) {
+          const sample: GuardrailSample = {
+            requestId: result.trace.requestId,
+            timestamp: new Date().toISOString(),
+            variant: picked.variant as RolloutVariant,
+            mismatch: result.trace.mismatches.length > 0,
+            toolError: result.auditEntries.some((e) => e.outcome === 'failed'),
+            latencyMs: runLatencyMs,
+          };
+          dispatch({ type: 'APPEND_GUARDRAIL_SAMPLE', payload: sample });
+
+          const nextSamples = [...state.rollout.samples, sample];
+          const baseline = championBaseline(
+            nextSamples,
+            state.rollout.guardrailConfig.latency_factor.window,
+          );
+          const breach = evaluateGuardrails(
+            nextSamples,
+            state.rollout.guardrailConfig,
+            baseline,
+          );
+          if (breach && state.rollout.canaryPercent > 0) {
+            const breachRecord = createBreachRecord(
+              breach,
+              state.rollout.canaryPercent,
+            );
+            dispatch({ type: 'SET_CANARY_PERCENT', payload: 0 });
+            dispatch({ type: 'RECORD_GUARDRAIL_BREACH', payload: breachRecord });
+            dispatch({
+              type: 'APPEND_ROLLOUT_AUDIT',
+              payload: {
+                id: crypto.randomUUID(),
+                timestamp: new Date().toISOString(),
+                actor: { type: 'system', component: 'rollout_guardrail' },
+                action: 'rolled_back_auto',
+                snapshotId: state.rollout.challengerId,
+                details: {
+                  metric: breach.metric,
+                  value: breach.value,
+                  threshold: breach.threshold,
+                  previousCanaryPercent: state.rollout.canaryPercent,
+                },
+              },
+            });
+          }
         }
       } catch (err) {
         dispatch({
@@ -75,7 +170,7 @@ export function useChat() {
         setIsLoading(false);
       }
     },
-    [state.chatMessages, state.settings, state.promptConfig, state.toolCatalog, state.demoState, state.toolCallLedger, state.session, dispatch],
+    [state.chatMessages, state.settings, state.promptConfig, state.toolCatalog, state.demoState, state.toolCallLedger, state.session, state.rollout, dispatch],
   );
 
   const resetChat = useCallback(() => {
@@ -101,6 +196,21 @@ export function useApproval() {
         const lastUserMessage =
           state.chatMessages.filter((m) => m.role === 'user').pop()?.content ?? '';
 
+        // Continue on the same variant the initial request used, so an
+        // approval does not hop snapshots mid-flow.
+        const previousTrace = state.traces[0];
+        const pinnedSnapshot =
+          previousTrace?.configSnapshotId
+            ? state.rollout.snapshots.find(
+                (s) => s.id === previousTrace.configSnapshotId,
+              ) ?? null
+            : null;
+        const activePromptConfig =
+          pinnedSnapshot?.promptConfig ?? state.promptConfig;
+        const activeToolCatalog =
+          pinnedSnapshot?.toolCatalog ?? state.toolCatalog;
+        const activeVariant = previousTrace?.variant ?? null;
+
         const result = await runWorkflow({
           userMessage: lastUserMessage,
           conversationHistory: state.chatMessages.slice(0, -1).map((m) => ({
@@ -108,8 +218,8 @@ export function useApproval() {
             content: m.content,
           })),
           settings: state.settings,
-          promptConfig: state.promptConfig,
-          toolCatalog: state.toolCatalog,
+          promptConfig: activePromptConfig,
+          toolCatalog: activeToolCatalog,
           demoState: state.demoState,
           toolCallLedger: state.toolCallLedger,
           pendingApproval: {
@@ -119,13 +229,21 @@ export function useApproval() {
           session: state.session,
         });
 
+        const stampedTrace = {
+          ...result.trace,
+          configSnapshotId: pinnedSnapshot?.id ?? null,
+          variant: activeVariant,
+        };
+
         const assistantMsg: ChatMessage = {
           id: crypto.randomUUID(),
           role: 'assistant',
           content: result.finalAnswer,
+          variant: activeVariant,
+          configSnapshotLabel: pinnedSnapshot?.label ?? null,
         };
         dispatch({ type: 'ADD_CHAT_MESSAGE', payload: assistantMsg });
-        dispatch({ type: 'ADD_TRACE', payload: result.trace });
+        dispatch({ type: 'ADD_TRACE', payload: stampedTrace });
         dispatch({ type: 'UPDATE_DEMO_STATE', payload: result.updatedState });
         dispatch({ type: 'UPDATE_LEDGER', payload: result.updatedLedger });
         if (result.auditEntries.length > 0) {
@@ -141,7 +259,7 @@ export function useApproval() {
         setIsLoading(false);
       }
     },
-    [state.approvalRequest, state.chatMessages, state.settings, state.promptConfig, state.toolCatalog, state.demoState, state.toolCallLedger, state.session, dispatch],
+    [state.approvalRequest, state.chatMessages, state.settings, state.promptConfig, state.toolCatalog, state.demoState, state.toolCallLedger, state.session, state.traces, state.rollout, dispatch],
   );
 
   return {
